@@ -904,7 +904,7 @@ def ingest_sp(conn: sqlite3.Connection, sp_result: SPParseResult) -> dict[str, i
                     ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)""",
                     (
                         proc_id,
-                        target_id or 0,
+                        target_id,
                         rel.relationship_type,
                         rel.confidence,
                         now_iso,
