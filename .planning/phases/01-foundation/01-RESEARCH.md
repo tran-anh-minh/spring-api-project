@@ -538,22 +538,22 @@ def open_store(db_path: Path) -> sqlite3.Connection:
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **sqlglot constraint node names in 30.x**
    - What we know: sqlglot distinguishes column-level vs table-level constraints with different node type names
    - What's unclear: Whether `exp.PrimaryKeyColumnConstraint` is the exact class name in 30.4.2, or if it was renamed
-   - Recommendation: Wave 0 task — write a 5-line test that parses `CREATE TABLE t (id INT PRIMARY KEY NOT NULL)` and prints all constraint node types to verify names before writing the extractor
+   - RESOLVED: Embedded as TDD test assertions in Plan 01-02 Task 2 — tests parse sample DDL and verify constraint extraction at runtime. If node names changed, tests will reveal the correct names immediately.
 
 2. **FastMCP lifespan context access in mcp 1.27**
    - What we know: The lifespan pattern is documented and stable; the exact attribute path on the Context object may vary
    - What's unclear: Whether it's `ctx.request_context.lifespan_context` or a different path in 1.27
-   - Recommendation: Wave 0 task — create a minimal FastMCP server, add a tool that prints `dir(ctx)`, run it to inspect the actual API
+   - RESOLVED: Plan 01-03 Task 1 includes executor guidance — check `dir(ctx)` and adapt if path changed. The lifespan pattern itself is stable; only the access path may vary.
 
 3. **pydantic-settings YAML source import path**
    - What we know: pydantic-settings 2.x has YAML support; `YamlConfigSettingsSource` requires pyyaml
    - What's unclear: Whether `from pydantic_settings import YamlConfigSettingsSource` works in 2.x or needs a different import
-   - Recommendation: Verify with `python -c "from pydantic_settings import YamlConfigSettingsSource"` after install
+   - RESOLVED: Avoided — Plan 01-01 Task 3 uses plain pydantic BaseModel + yaml.safe_load instead of pydantic-settings YamlConfigSettingsSource. Simpler, avoids the path resolution pitfall (Pitfall 3), no dependency on pydantic-settings YAML support.
 
 ---
 

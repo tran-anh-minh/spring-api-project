@@ -43,8 +43,8 @@ created: 2026-04-10
 | TBD | TBD | TBD | STORE-02 | — | N/A | unit | `uv run pytest tests/test_store.py -v` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | STORE-03 | — | N/A | unit | `uv run pytest tests/test_store.py -v` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | STORE-04 | — | N/A | unit | `uv run pytest tests/test_store.py -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | MCP-01 | — | N/A | integration | `uv run pytest tests/test_mcp.py -v` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | MCP-02 | — | N/A | integration | `uv run pytest tests/test_mcp.py -v` | ❌ W0 | ⬜ pending |
+| TBD | TBD | TBD | MCP-01 | — | N/A | integration | `uv run pytest tests/test_server.py -v` | ❌ W0 | ⬜ pending |
+| TBD | TBD | TBD | MCP-02 | — | N/A | integration | `uv run pytest tests/test_server.py -v` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | CLI-01 | — | N/A | integration | `uv run pytest tests/test_cli.py -v` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | CLI-02 | — | N/A | integration | `uv run pytest tests/test_cli.py -v` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | CONFIG-02 | — | N/A | unit | `uv run pytest tests/test_config.py -v` | ❌ W0 | ⬜ pending |
@@ -59,7 +59,7 @@ created: 2026-04-10
 - [ ] `tests/conftest.py` — shared fixtures (temp SQLite DB, sample DDL files)
 - [ ] `tests/test_ddl_parser.py` — stubs for INGEST-01
 - [ ] `tests/test_store.py` — stubs for STORE-01 through STORE-04
-- [ ] `tests/test_mcp.py` — stubs for MCP-01, MCP-02
+- [ ] `tests/test_server.py` — stubs for MCP-01, MCP-02
 - [ ] `tests/test_cli.py` — stubs for CLI-01, CLI-02
 - [ ] `tests/test_config.py` — stubs for CONFIG-02, CONFIG-03
 - [ ] pytest + pytest-asyncio dev dependency install
