@@ -326,6 +326,89 @@ async def sp_info(procedure_name: str, ctx: Context) -> str:
     return "\n".join(lines)
 
 
+@mcp.tool()
+async def discover(ctx: Context, max_gaps: int = 10) -> str:
+    """Run a learning loop: detect knowledge gaps and investigate top N.
+
+    Args:
+        max_gaps: Maximum gaps to investigate in this run (default 10).
+
+    Returns:
+        Summary of gaps found, investigated, and facts updated.
+    """
+    import anyio
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+    config = load_config(app_ctx.store_path)
+    if max_gaps != config.learning.max_gaps_per_run:
+        config.learning.max_gaps_per_run = max_gaps
+
+    from db_wiki.learning.orchestrator import run_learning_loop
+
+    summary = await anyio.to_thread.run_sync(
+        lambda: run_learning_loop(app_ctx.conn, config)
+    )
+    return summary
+
+
+@mcp.tool()
+async def confirm(
+    entity_type: str,
+    entity_name: str,
+    attribute: str,
+    value: str,
+    ctx: Context,
+) -> str:
+    """Confirm a fact as human-verified (sets confidence to 1.0).
+
+    Args:
+        entity_type: "table", "column", "procedure", "enum", etc.
+        entity_name: Name of the entity (e.g., "Orders.Status").
+        attribute: Which attribute to confirm (e.g., "enum_label", "description").
+        value: The confirmed value.
+    """
+    import anyio
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.learning.confirm import confirm_fact
+
+    result = await anyio.to_thread.run_sync(
+        lambda: confirm_fact(app_ctx.conn, entity_type, entity_name, attribute, value)
+    )
+    return result
+
+
+@mcp.tool()
+async def teach(
+    entity_type: str,
+    entity_name: str,
+    attribute: str,
+    value: str,
+    ctx: Context,
+) -> str:
+    """Teach the system a new fact directly (human-injected knowledge).
+
+    Adds the fact with confidence=1.0 and human_confirmed=True.
+
+    Args:
+        entity_type: "table", "column", "procedure", "enum", etc.
+        entity_name: Name of the entity (e.g., "Orders.Status").
+        attribute: Which attribute to set (e.g., "description", "enum_label").
+        value: The value to teach.
+    """
+    import anyio
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.learning.confirm import teach_fact
+
+    result = await anyio.to_thread.run_sync(
+        lambda: teach_fact(app_ctx.conn, entity_type, entity_name, attribute, value)
+    )
+    return result
+
+
 def main() -> None:
     """Entry point for the db-wiki-mcp MCP server (stdio transport)."""
     mcp.run()

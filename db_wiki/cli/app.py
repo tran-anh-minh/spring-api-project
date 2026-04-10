@@ -466,6 +466,91 @@ def sp_info(
     conn.close()
 
 
+@app.command()
+def discover(
+    max_gaps: int = typer.Option(10, help="Maximum gaps to investigate"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", "-s", help="Path to the knowledge store"
+    ),
+) -> None:
+    """Run the learning loop: detect knowledge gaps and investigate."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    config = load_config(store_path)
+    if max_gaps != config.learning.max_gaps_per_run:
+        config.learning.max_gaps_per_run = max_gaps
+
+    conn = open_store(db_path)
+    init_schema(conn)
+    try:
+        from db_wiki.learning.orchestrator import run_learning_loop
+
+        summary = run_learning_loop(conn, config)
+        typer.echo(summary)
+    finally:
+        conn.close()
+
+
+@app.command()
+def confirm(
+    entity_type: str = typer.Argument(help="Entity type: table, column, procedure, enum"),
+    entity_name: str = typer.Argument(help="Entity name (e.g., Orders.Status)"),
+    attribute: str = typer.Argument(help="Attribute to confirm (e.g., enum_label)"),
+    value: str = typer.Argument(help="The confirmed value"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", "-s", help="Path to the knowledge store"
+    ),
+) -> None:
+    """Confirm a fact as human-verified (sets confidence to 1.0)."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+    try:
+        from db_wiki.learning.confirm import confirm_fact
+
+        result = confirm_fact(conn, entity_type, entity_name, attribute, value)
+        typer.echo(result)
+    finally:
+        conn.close()
+
+
+@app.command()
+def teach(
+    entity_type: str = typer.Argument(help="Entity type: table, column, procedure, enum"),
+    entity_name: str = typer.Argument(help="Entity name (e.g., Orders.Status)"),
+    attribute: str = typer.Argument(help="Attribute to set (e.g., description)"),
+    value: str = typer.Argument(help="The value to teach"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", "-s", help="Path to the knowledge store"
+    ),
+) -> None:
+    """Teach the system a new fact (adds with confidence=1.0)."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+    try:
+        from db_wiki.learning.confirm import teach_fact
+
+        result = teach_fact(conn, entity_type, entity_name, attribute, value)
+        typer.echo(result)
+    finally:
+        conn.close()
+
+
 def main() -> None:
     """Entry point for the db-wiki CLI."""
     app()
