@@ -13,12 +13,13 @@ def tmp_store_path(tmp_path: Path) -> Path:
 
 
 @pytest.fixture
-def in_memory_db() -> sqlite3.Connection:
-    """Return an in-memory SQLite connection with foreign keys enabled."""
+def in_memory_db():
+    """Yield an in-memory SQLite connection with foreign keys enabled."""
     conn = sqlite3.connect(":memory:")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row
-    return conn
+    yield conn
+    conn.close()
 
 
 @pytest.fixture
