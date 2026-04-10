@@ -51,11 +51,11 @@ Plans:
 **UI hint**: no
 
 Plans:
-- [ ] 02-01-PLAN.md — Phase 2 schema tables, SP Pydantic models, sqlite-vec store integration, embedding config
-- [ ] 02-02-PLAN.md — SP parser module with three-pass extraction, batch ingest, CLI ingest extension
-- [ ] 02-03-PLAN.md — Search infrastructure: lazy-loaded embedder, FTS5 index, hybrid score fusion
-- [ ] 02-04-PLAN.md — Python BFS graph traversal with edge type filtering and cycle detection
-- [ ] 02-05-PLAN.md — MCP tools (search, lineage, sp_info) and CLI commands
+- [x] 02-01-PLAN.md — Phase 2 schema tables, SP Pydantic models, sqlite-vec store integration, embedding config
+- [x] 02-02-PLAN.md — SP parser module with three-pass extraction, batch ingest, CLI ingest extension
+- [x] 02-03-PLAN.md — Search infrastructure: lazy-loaded embedder, FTS5 index, hybrid score fusion
+- [x] 02-04-PLAN.md — Python BFS graph traversal with edge type filtering and cycle detection
+- [x] 02-05-PLAN.md — MCP tools (search, lineage, sp_info) and CLI commands
 
 ### Phase 3: Learning Loop
 **Goal**: The system autonomously identifies knowledge gaps and deepens its understanding through iterative investigation
