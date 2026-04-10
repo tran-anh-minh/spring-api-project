@@ -70,8 +70,8 @@ Plans:
 **Plans:** 7 plans
 
 Plans:
-- [ ] 03-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
-- [ ] 03-01-PLAN.md — Learning schema (knowledge_gaps, agent_tasks, agent_results), config extension, Pydantic models
+- [x] 03-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
+- [x] 03-01-PLAN.md — Learning schema (knowledge_gaps, agent_tasks, agent_results), config extension, Pydantic models
 - [ ] 03-02-PLAN.md — 12 gap detection rules and priority scoring formula
 - [ ] 03-03-PLAN.md — Confidence management (decay, reinforcement, conflict resolution) and 4-op update pipeline
 - [ ] 03-04-PLAN.md — Agent framework: Collector, Research, Review agents with LLM fallback
