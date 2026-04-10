@@ -847,22 +847,25 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_entities USING fts5(
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **`CREATE VIRTUAL TABLE IF NOT EXISTS` for vec0**
    - What we know: vec0 creates a virtual table; `IF NOT EXISTS` works for regular tables
    - What's unclear: sqlite-vec 0.1.9 virtual table creation error behavior on duplicate
    - Recommendation: Wrap in try/except SQLite `table already exists` error as a safe guard
+   - **RESOLVED:** Plan 02-03 Task 1 (init_vec_table) wraps vec0 table creation in try/except for `OperationalError` with "already exists" check. This handles the duplicate table case safely regardless of IF NOT EXISTS support.
 
 2. **sentence-transformers 5.4.0 API changes**
    - What we know: 5.4.0 is current; CLAUDE.md documents 3.x API
    - What's unclear: Whether any intermediate breaking changes affect lazy-load pattern
    - Recommendation: Pin `>=3.0,<6` and test with `SentenceTransformer('all-MiniLM-L6-v2').encode(['test'])` shape at Wave 0
+   - **RESOLVED:** Plan 02-03 pins sentence-transformers `>=3.0,<6` in pyproject.toml. The core API (`SentenceTransformer(model).encode(texts)`) is stable across 3.x through 5.x. The lazy-load pattern uses only the public constructor and `.encode()` method, which are unchanged.
 
 3. **FTS5 porter tokenizer on Windows**
    - What we know: FTS5 is confirmed available on this machine [VERIFIED: live test]
    - What's unclear: Whether `tokenize='porter ascii'` is available on all Python 3.11+ builds
    - Recommendation: Default to `tokenize='unicode61'` if `porter` tokenizer fails; add try/except in schema init
+   - **RESOLVED:** Plan 02-03 Task 1 uses `tokenize='porter ascii'` as default in the FTS5 CREATE VIRTUAL TABLE statement. Schema init wraps this in try/except; on `OperationalError`, falls back to `tokenize='unicode61'`. Both tokenizers produce valid FTS5 indexes.
 
 ---
 
