@@ -69,19 +69,23 @@ async def ingest(file_path: str, ctx: Context) -> str:
     # T-03-02: validate path before reading
     path = Path(file_path).resolve()
     if not path.exists():
-        return f"Error: File not found: {file_path}"
+        logger.error("File not found: %s", file_path)
+        raise ValueError(f"File not found: {file_path}")
     if not path.is_file():
-        return f"Error: Not a file: {file_path}"
+        logger.error("Not a file: %s", file_path)
+        raise ValueError(f"Not a file: {file_path}")
 
     # T-03-03: enforce file size limit
     config = load_config(app_ctx.store_path)
     max_bytes = config.ingest.max_file_size_mb * 1024 * 1024
     file_size = path.stat().st_size
     if file_size > max_bytes:
-        return (
-            f"Error: File too large "
+        msg = (
+            f"File too large "
             f"({file_size / 1024 / 1024:.1f}MB > {config.ingest.max_file_size_mb}MB limit)"
         )
+        logger.error(msg)
+        raise ValueError(msg)
 
     sql_text = path.read_text(encoding="utf-8")
 
@@ -104,10 +108,10 @@ async def ingest(file_path: str, ctx: Context) -> str:
                 summary += f"\n  - {w}"
         return summary
     except ImportError:
-        return "Error: DDL parser module not available. Ensure db_wiki.ingest is installed."
+        raise ImportError("DDL parser module not available. Ensure db_wiki.ingest is installed.")
     except Exception as e:
         logger.exception("Ingest failed for %s", file_path)
-        return f"Error during ingest: {e}"
+        raise
 
 
 @mcp.tool()
@@ -126,7 +130,7 @@ async def status(ctx: Context) -> str:
         return f"Knowledge store: {tables} tables, {columns} columns, {rels} relationships"
     except Exception as e:
         logger.exception("Status query failed")
-        return f"Error reading store: {e}"
+        raise
 
 
 def main() -> None:
