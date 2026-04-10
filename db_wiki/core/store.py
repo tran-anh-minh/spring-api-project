@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite_vec
 
 from db_wiki.core.schema import get_schema_sql
+from db_wiki.learning.schema_ext import init_learning_schema
 
 
 def open_store(db_path: Path) -> sqlite3.Connection:
@@ -48,6 +49,7 @@ def init_schema(conn: sqlite3.Connection) -> None:
         conn: An open SQLite connection (from :func:`open_store` or test fixtures).
     """
     conn.executescript(get_schema_sql())
+    init_learning_schema(conn)
 
 
 def init_vec_table(conn: sqlite3.Connection, dimensions: int) -> None:

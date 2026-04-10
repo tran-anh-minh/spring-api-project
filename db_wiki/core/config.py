@@ -42,6 +42,34 @@ class EmbeddingConfig(BaseModel):
     openai_dimensions: int = 1536
 
 
+class LearningGapWeightsConfig(BaseModel):
+    """Weights for gap priority scoring formula."""
+
+    severity: float = 0.30
+    connectivity: float = 0.25
+    query_frequency: float = 0.20
+    staleness: float = 0.15
+    solvability: float = 0.10
+
+
+class LearningConfig(BaseModel):
+    """Learning loop configuration."""
+
+    max_gaps_per_run: int = 10
+    llm_provider: str | None = None  # None = offline/heuristic mode
+    llm_api_key: str | None = None
+    llm_model: str | None = None
+    decay_rate_weekly: float = 0.01
+    decay_rate_confirmed_monthly: float = 0.005
+    conflict_escalate_threshold: float = 0.1
+    cooldown_hours: list[int] = [1, 4, 24, 72, 168]
+    max_attempts_before_permanent: int = 5
+    collector_timeout_seconds: int = 10
+    collector_max_rows: int = 100
+    collector_query_budget: int = 20
+    gap_weights: LearningGapWeightsConfig = LearningGapWeightsConfig()
+
+
 class DBWikiConfig(BaseModel):
     """Top-level configuration for db-wiki."""
 
@@ -49,6 +77,7 @@ class DBWikiConfig(BaseModel):
     database: DatabaseConfig = DatabaseConfig()
     ingest: IngestConfig = IngestConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
+    learning: LearningConfig = LearningConfig()
 
 
 def load_config(store_path: Path) -> DBWikiConfig:
