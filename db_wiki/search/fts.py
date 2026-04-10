@@ -70,10 +70,12 @@ def search_fts(
 
     FTS5 rank() returns negative values (less negative = better match).
     """
+    # Escape double quotes and wrap as phrase to prevent FTS5 syntax errors
+    safe_query = '"' + query.replace('"', '""') + '"'
     rows = conn.execute(
         "SELECT entity_type, entity_name, entity_id, rank "
         "FROM fts_entities WHERE fts_entities MATCH ? "
         "ORDER BY rank LIMIT ?",
-        (query, limit),
+        (safe_query, limit),
     ).fetchall()
     return [(row[0], row[1], row[2], row[3]) for row in rows]
