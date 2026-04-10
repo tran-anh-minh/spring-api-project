@@ -392,126 +392,128 @@ def ingest_ddl(conn: sqlite3.Connection, parse_result: ParseResult) -> dict[str,
     # Map table_name -> inserted row id for FK linking
     table_id_map: dict[str, int] = {}
 
-    for table_info in parse_result.tables:
-        cursor = conn.execute(
-            """
-            INSERT INTO db_tables (
-                table_name, schema_name,
-                valid_from, valid_from_ts, valid_until, valid_until_ts,
-                recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
-            ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
-            """,
-            (
-                table_info.table_name,
-                table_info.schema_name,
-                now_iso,
-                now_ts,
-                now_iso,
-                now_ts,
-            ),
-        )
-        table_id = cursor.lastrowid
-        table_id_map[table_info.table_name] = table_id
-        table_counts += 1
-
-        for col in table_info.columns:
-            conn.execute(
+    try:
+        for table_info in parse_result.tables:
+            cursor = conn.execute(
                 """
-                INSERT INTO db_columns (
-                    table_id, column_name, data_type,
-                    is_nullable, is_primary_key, is_unique, default_value,
-                    ordinal_position,
+                INSERT INTO db_tables (
+                    table_name, schema_name,
                     valid_from, valid_from_ts, valid_until, valid_until_ts,
                     recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+                ) VALUES (?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
                 """,
                 (
-                    table_id,
-                    col.column_name,
-                    col.data_type,
-                    1 if col.is_nullable else 0,
-                    1 if col.is_primary_key else 0,
-                    1 if col.is_unique else 0,
-                    col.default_value,
-                    col.ordinal_position,
+                    table_info.table_name,
+                    table_info.schema_name,
                     now_iso,
                     now_ts,
                     now_iso,
                     now_ts,
                 ),
             )
-            column_counts += 1
+            table_id = cursor.lastrowid
+            table_id_map[table_info.table_name] = table_id
+            table_counts += 1
 
-    conn.commit()
+            for col in table_info.columns:
+                conn.execute(
+                    """
+                    INSERT INTO db_columns (
+                        table_id, column_name, data_type,
+                        is_nullable, is_primary_key, is_unique, default_value,
+                        ordinal_position,
+                        valid_from, valid_from_ts, valid_until, valid_until_ts,
+                        recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+                    """,
+                    (
+                        table_id,
+                        col.column_name,
+                        col.data_type,
+                        1 if col.is_nullable else 0,
+                        1 if col.is_primary_key else 0,
+                        1 if col.is_unique else 0,
+                        col.default_value,
+                        col.ordinal_position,
+                        now_iso,
+                        now_ts,
+                        now_iso,
+                        now_ts,
+                    ),
+                )
+                column_counts += 1
 
-    # Insert relationships (source_id/target_id are table row ids)
-    for rel in parse_result.relationships:
-        source_id = table_id_map.get(rel.source_table)
-        target_id = table_id_map.get(rel.target_table)
-        # Skip relationships where referenced tables were not ingested in this batch
-        if source_id is None or target_id is None:
-            logger.warning(
-                "Skipping relationship %s->%s: table not found in current batch",
-                rel.source_table,
-                rel.target_table,
+        # Insert relationships (source_id/target_id are table row ids)
+        for rel in parse_result.relationships:
+            source_id = table_id_map.get(rel.source_table)
+            target_id = table_id_map.get(rel.target_table)
+            # Skip relationships where referenced tables were not ingested in this batch
+            if source_id is None or target_id is None:
+                logger.warning(
+                    "Skipping relationship %s->%s: table not found in current batch",
+                    rel.source_table,
+                    rel.target_table,
+                )
+                continue
+            conn.execute(
+                """
+                INSERT INTO db_relationships (
+                    source_id, target_id, relationship_type,
+                    source_column, target_column, confidence,
+                    valid_from, valid_from_ts, valid_until, valid_until_ts,
+                    recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+                """,
+                (
+                    source_id,
+                    target_id,
+                    rel.relationship_type,
+                    rel.source_column,
+                    rel.target_column,
+                    rel.confidence,
+                    now_iso,
+                    now_ts,
+                    now_iso,
+                    now_ts,
+                ),
             )
-            continue
-        conn.execute(
-            """
-            INSERT INTO db_relationships (
-                source_id, target_id, relationship_type,
-                source_column, target_column, confidence,
-                valid_from, valid_from_ts, valid_until, valid_until_ts,
-                recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
-            """,
-            (
-                source_id,
-                target_id,
-                rel.relationship_type,
-                rel.source_column,
-                rel.target_column,
-                rel.confidence,
-                now_iso,
-                now_ts,
-                now_iso,
-                now_ts,
-            ),
-        )
-        relationship_counts += 1
+            relationship_counts += 1
 
-    # Insert indexes
-    for idx in parse_result.indexes:
-        parent_table_id = table_id_map.get(idx.table_name)
-        if parent_table_id is None:
-            logger.warning(
-                "Skipping index %s: table %s not found in current batch",
-                idx.index_name,
-                idx.table_name,
+        # Insert indexes
+        for idx in parse_result.indexes:
+            parent_table_id = table_id_map.get(idx.table_name)
+            if parent_table_id is None:
+                logger.warning(
+                    "Skipping index %s: table %s not found in current batch",
+                    idx.index_name,
+                    idx.table_name,
+                )
+                continue
+            conn.execute(
+                """
+                INSERT INTO db_indexes (
+                    table_id, index_name, is_unique, columns_json,
+                    valid_from, valid_from_ts, valid_until, valid_until_ts,
+                    recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
+                ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
+                """,
+                (
+                    parent_table_id,
+                    idx.index_name,
+                    1 if idx.is_unique else 0,
+                    json.dumps(idx.columns),
+                    now_iso,
+                    now_ts,
+                    now_iso,
+                    now_ts,
+                ),
             )
-            continue
-        conn.execute(
-            """
-            INSERT INTO db_indexes (
-                table_id, index_name, is_unique, columns_json,
-                valid_from, valid_from_ts, valid_until, valid_until_ts,
-                recorded_at, recorded_at_ts, invalidated_at, invalidated_at_ts
-            ) VALUES (?, ?, ?, ?, ?, ?, NULL, NULL, ?, ?, NULL, NULL)
-            """,
-            (
-                parent_table_id,
-                idx.index_name,
-                1 if idx.is_unique else 0,
-                json.dumps(idx.columns),
-                now_iso,
-                now_ts,
-                now_iso,
-                now_ts,
-            ),
-        )
-        index_counts += 1
+            index_counts += 1
 
-    conn.commit()
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
     return {
         "tables": table_counts,
