@@ -309,7 +309,7 @@ def test_extract_alter_table_constraint_fk():
     ddl = """ALTER TABLE dbo.Orders ADD CONSTRAINT FK_Orders_Customers
         FOREIGN KEY (CustomerID) REFERENCES dbo.Customers(CustomerID)"""
     stmt = sqlglot.parse(ddl, dialect="tsql")[0]
-    assert isinstance(stmt, exp.AlterTable)
+    assert isinstance(stmt, exp.Alter)
 
     relationships = extract_alter_table_constraint(stmt)
     assert len(relationships) >= 1
