@@ -482,7 +482,14 @@ def ingest_ddl(conn: sqlite3.Connection, parse_result: ParseResult) -> dict[str,
 
     # Insert indexes
     for idx in parse_result.indexes:
-        parent_table_id = table_id_map.get(idx.table_name, 0)
+        parent_table_id = table_id_map.get(idx.table_name)
+        if parent_table_id is None:
+            logger.warning(
+                "Skipping index %s: table %s not found in current batch",
+                idx.index_name,
+                idx.table_name,
+            )
+            continue
         conn.execute(
             """
             INSERT INTO db_indexes (
