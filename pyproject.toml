@@ -1,0 +1,36 @@
+[project]
+name = "db-wiki"
+version = "0.1.0"
+description = "Self-learning database knowledge engine"
+requires-python = ">=3.11"
+dependencies = [
+    "sqlglot>=30.0,<31",
+    "mcp>=1.27,<2",
+    "typer>=0.24,<1",
+    "pydantic>=2.12,<3",
+    "pydantic-settings>=2.0,<3",
+    "pyyaml>=6.0",
+]
+
+[project.scripts]
+db-wiki = "db_wiki.cli.app:main"
+db-wiki-mcp = "db_wiki.server.app:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0",
+    "pytest-asyncio>=1.0",
+    "ruff>=0.15",
+    "pyright>=1.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
