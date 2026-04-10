@@ -30,7 +30,12 @@ Decimal phases appear between their surrounding integers in numeric order.
   3. User can run `db-wiki init` and `db-wiki connect` to create a configured knowledge store
   4. All data access goes through bi-temporal views — no raw table queries in application code
   5. The system works offline from SQL files with no live database required
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 01-01-PLAN.md — Project scaffold, SQLite bi-temporal schema, YAML config system
+- [ ] 01-02-PLAN.md — DDL parser and ingest pipeline (sqlglot)
+- [ ] 01-03-PLAN.md — FastMCP server skeleton and Typer CLI
 
 ### Phase 2: SP Parsing + Knowledge Graph
 **Goal**: Users can ingest stored procedures and explore the full relationship graph between tables and SPs
@@ -90,7 +95,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 1. Foundation | 0/TBD | Not started | - |
+| 1. Foundation | 0/3 | Planning complete | - |
 | 2. SP Parsing + Knowledge Graph | 0/TBD | Not started | - |
 | 3. Learning Loop | 0/TBD | Not started | - |
 | 4. Query Engine | 0/TBD | Not started | - |
