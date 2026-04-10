@@ -133,7 +133,7 @@ def test_ingest_skips_large_files(store_dir: Path, tmp_path: Path):
     config_path = store_dir / "config.yaml"
     with open(config_path, encoding="utf-8") as f:
         config = yaml.safe_load(f)
-    config["ingest"]["max_file_size_mb"] = 0  # 0 MB = reject everything
+    config["ingest"]["max_file_size_mb"] = 0.000001  # ~1 byte = reject everything
     with open(config_path, "w", encoding="utf-8") as f:
         yaml.dump(config, f)
 

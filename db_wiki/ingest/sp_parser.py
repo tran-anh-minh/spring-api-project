@@ -37,6 +37,14 @@ logger = logging.getLogger(__name__)
 # Regex for extracting table refs from Command fallback nodes (D-01 pass 2)
 TABLE_REF_RE = re.compile(r"\b(?:FROM|JOIN|UPDATE|INTO)\s+([\w\.]+)", re.IGNORECASE)
 
+# Regex for detecting dynamic SQL in Command fallback nodes
+DYNAMIC_SQL_RE = re.compile(r"\bEXEC\s*\(\s*@", re.IGNORECASE)
+SP_EXECUTESQL_RE = re.compile(r"\bEXEC\s+sp_executesql\b", re.IGNORECASE)
+
+# Regex for detecting IF/ELSE/WHILE control flow in Command fallback nodes
+IF_RE = re.compile(r"\bIF\b", re.IGNORECASE)
+WHILE_RE = re.compile(r"\bWHILE\b", re.IGNORECASE)
+
 
 def compute_body_hash(sql_text: str) -> str:
     """Compute SHA-256 hash of normalized SQL text for incremental re-parse (D-11).
@@ -210,36 +218,44 @@ def extract_branches(sp_stmt: exp.Create) -> list[BranchInfo]:
     branches: list[BranchInfo] = []
     branch_idx = 0
 
-    # IF blocks — sqlglot may parse as If nodes or fall to Command
-    for if_node in sp_stmt.find_all(exp.If):
-        # Skip If nodes that are CASE WHEN branches (they appear inside Case)
-        parent = if_node.parent
-        if isinstance(parent, exp.Case):
+    # IF blocks — sqlglot T-SQL produces exp.If (CASE WHEN) and/or exp.IfBlock (procedural IF)
+    # Check both node types to handle different sqlglot versions
+    for if_cls in (exp.If, getattr(exp, "IfBlock", None)):
+        if if_cls is None:
             continue
+        for if_node in sp_stmt.find_all(if_cls):
+            # Skip If nodes that are CASE WHEN branches (they appear inside Case)
+            parent = if_node.parent
+            if isinstance(parent, exp.Case):
+                continue
 
-        condition_text = if_node.this.sql() if if_node.this else None
-        tables_touched = [
-            t.name for t in if_node.find_all(exp.Table) if t.name != _get_sp_name(sp_stmt)
-        ]
+            condition_text = if_node.this.sql() if if_node.this else None
+            tables_touched = [
+                t.name
+                for t in if_node.find_all(exp.Table)
+                if t.name != _get_sp_name(sp_stmt)
+            ]
 
-        # Calculate nesting depth by counting If ancestors
-        depth = 0
-        p = if_node.parent
-        while p:
-            if isinstance(p, exp.If) and not isinstance(p.parent, exp.Case):
-                depth += 1
-            p = getattr(p, "parent", None)
+            # Calculate nesting depth by counting If/IfBlock ancestors
+            depth = 0
+            p = if_node.parent
+            while p:
+                if isinstance(p, (exp.If,)) and not isinstance(p.parent, exp.Case):
+                    depth += 1
+                elif if_cls is not exp.If and isinstance(p, if_cls):
+                    depth += 1
+                p = getattr(p, "parent", None)
 
-        branches.append(
-            BranchInfo(
-                branch_index=branch_idx,
-                condition_text=condition_text,
-                branch_type="if",
-                tables_touched=tables_touched,
-                nesting_depth=depth,
+            branches.append(
+                BranchInfo(
+                    branch_index=branch_idx,
+                    condition_text=condition_text,
+                    branch_type="if",
+                    tables_touched=tables_touched,
+                    nesting_depth=depth,
+                )
             )
-        )
-        branch_idx += 1
+            branch_idx += 1
 
     # CASE/WHEN via exp.Case
     for case_node in sp_stmt.find_all(exp.Case):
@@ -258,9 +274,20 @@ def extract_branches(sp_stmt: exp.Create) -> list[BranchInfo]:
         )
         branch_idx += 1
 
-    # Command nodes that contain ELSE/WHILE text (fallback)
+    # Command nodes that contain IF/ELSE/WHILE text (fallback for unparsed bodies)
     for cmd in sp_stmt.find_all(exp.Command):
         cmd_sql = cmd.sql()
+        if IF_RE.search(cmd_sql):
+            branches.append(
+                BranchInfo(
+                    branch_index=branch_idx,
+                    condition_text=None,
+                    branch_type="if",
+                    tables_touched=[m.split(".")[-1] for m in TABLE_REF_RE.findall(cmd_sql)],
+                    nesting_depth=0,
+                )
+            )
+            branch_idx += 1
         if "ELSE" in cmd_sql.upper():
             branches.append(
                 BranchInfo(
@@ -272,7 +299,7 @@ def extract_branches(sp_stmt: exp.Create) -> list[BranchInfo]:
                 )
             )
             branch_idx += 1
-        if "WHILE" in cmd_sql.upper():
+        if WHILE_RE.search(cmd_sql):
             branches.append(
                 BranchInfo(
                     branch_index=branch_idx,
@@ -352,6 +379,18 @@ def extract_call_chains(
                     "type": info["type"],
                     "sql_preview": exe.sql()[:200],
                 }
+            )
+
+    # Pass 2: Command fallback nodes — regex detection for dynamic SQL
+    for cmd in sp_stmt.find_all(exp.Command):
+        cmd_sql = cmd.sql()
+        if DYNAMIC_SQL_RE.search(cmd_sql):
+            dynamic_sql_locations.append(
+                {"type": "dynamic", "sql_preview": cmd_sql[:200]}
+            )
+        elif SP_EXECUTESQL_RE.search(cmd_sql):
+            dynamic_sql_locations.append(
+                {"type": "sp_executesql", "sql_preview": cmd_sql[:200]}
             )
 
     return call_chains, dynamic_sql_locations
