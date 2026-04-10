@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 
 import sqlglot
 from sqlglot import exp
+from sqlglot.errors import ErrorLevel
 
 from db_wiki.core.models import (
     ColumnInfo,
@@ -63,9 +64,13 @@ def parse_ddl_file(sql_text: str) -> tuple[list[exp.Expression], list[str]]:
     Returns:
         Tuple of (valid_statements, warning_messages).
     """
-    statements = sqlglot.parse(sql_text, dialect="tsql")
+    # Use WARN level so sqlglot logs errors but doesn't raise — tolerant parsing (D-04)
+    statements = sqlglot.parse(sql_text, dialect="tsql", error_level=ErrorLevel.WARN)
     valid: list[exp.Expression] = []
     warnings: list[str] = []
+
+    # DDL statement types we handle; anything else is invalid/unparseable
+    _valid_types = (exp.Create, exp.Alter)
 
     for stmt in statements:
         if stmt is None:
@@ -77,6 +82,13 @@ def parse_ddl_file(sql_text: str) -> tuple[list[exp.Expression], list[str]]:
             # sqlglot fallback for unparseable syntax — log and skip
             preview = stmt.sql()[:120]
             msg = f"Skipping unparseable command statement: {preview!r}"
+            logger.warning(msg)
+            warnings.append(msg)
+            continue
+        if not isinstance(stmt, _valid_types):
+            # sqlglot parsed the invalid statement as some other node type (e.g., Alias)
+            preview = stmt.sql()[:120]
+            msg = f"Skipping unrecognized statement type {type(stmt).__name__}: {preview!r}"
             logger.warning(msg)
             warnings.append(msg)
             continue
@@ -206,8 +218,9 @@ def extract_create_index(stmt: exp.Create) -> IndexInfo | None:
     table_name = table_node.name if table_node else ""
     schema_name = table_node.db if (table_node and table_node.db) else None
 
-    # is_unique comes from index_node.args["unique"] (not stmt.args["unique"])
-    is_unique = bool(index_node.args.get("unique"))
+    # is_unique comes from stmt.args["unique"] (top-level Create node)
+    # Note: index_node.args["unique"] is None even for UNIQUE indexes in sqlglot 30.x
+    is_unique = bool(stmt.args.get("unique"))
 
     # Columns from the index parameters
     columns: list[str] = []

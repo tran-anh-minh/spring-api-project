@@ -98,7 +98,10 @@ def test_parse_ddl_file_skips_invalid_and_returns_warnings():
     assert len(statements) == 2
     # Should have at least one warning about the invalid statement
     assert len(warnings) >= 1
-    assert any("skip" in w.lower() or "unparse" in w.lower() or "command" in w.lower() for w in warnings)
+    assert any(
+        "skip" in w.lower() or "unparse" in w.lower() or "command" in w.lower() or "unrecognized" in w.lower()
+        for w in warnings
+    )
 
 
 def test_parse_ddl_file_returns_tuple():
