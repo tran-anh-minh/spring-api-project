@@ -1,7 +1,7 @@
 """Shared confirm/teach logic for human knowledge injection.
 
 Used by both MCP tools and CLI commands. Implements LEARN-10:
-- confirm_fact: verify an existing fact (sets confidence=1.0, human_confirmed=True)
+- confirm_fact: verify an existing fact (sets confidence=1.0, detection_method='human_confirmed')
 - teach_fact: add or override a fact with human authority
 
 Human-confirmed facts get slow decay (0.5%/month per D-15) handled
@@ -26,8 +26,11 @@ def confirm_fact(
 ) -> str:
     """Confirm an existing fact as human-verified.
 
-    Sets confidence to 1.0 and human_confirmed to True. If the value
-    doesn't match or the fact doesn't exist, returns guidance.
+    Sets confidence to 1.0 and detection_method to 'human_confirmed'.
+    Human-confirmed facts get slower decay rate (0.5%/month) -- the decay
+    function checks detection_method, not a separate flag.
+
+    If the value doesn't match or the fact doesn't exist, returns guidance.
     """
     existing = find_existing_fact(conn, entity_type, entity_name, attribute)
 
