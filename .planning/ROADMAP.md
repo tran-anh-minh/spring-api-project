@@ -60,16 +60,17 @@ Plans:
 ### Phase 3: Learning Loop
 **Goal**: The system autonomously identifies knowledge gaps and deepens its understanding through iterative investigation
 **Depends on**: Phase 2
-**Requirements**: LEARN-01, LEARN-02, LEARN-03, LEARN-04, LEARN-05, LEARN-06, LEARN-07, LEARN-08, LEARN-09, LEARN-10, LEARN-11, LEARN-12, LEARN-13, STORE-08, MCP-03, AGENT-01, AGENT-02, AGENT-04, AGENT-05
+**Requirements**: LEARN-01, LEARN-02, LEARN-03, LEARN-04, LEARN-05, LEARN-06, LEARN-07, LEARN-08, LEARN-09, LEARN-10, LEARN-11, LEARN-12, STORE-08, MCP-03, AGENT-01, AGENT-02, AGENT-04, AGENT-05
 **Success Criteria** (what must be TRUE):
   1. User can trigger a learning loop run and observe gap detection finding unlabeled enums, orphan tables, and missing joins
   2. Human can confirm a fact via `dbwiki:confirm` and its confidence is set to 1.0, never silently overridden
   3. Conflict between two sources produces SUPERSEDE/KEEP/SPLIT/ESCALATE resolution with logged rationale
   4. Confidence decays over time for stale facts and is reinforced when new evidence supports existing knowledge
   5. Gap cooldown prevents the same gap from being re-created infinitely across loop iterations
-**Plans:** 6 plans
+**Plans:** 7 plans
 
 Plans:
+- [ ] 03-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
 - [ ] 03-01-PLAN.md — Learning schema (knowledge_gaps, agent_tasks, agent_results), config extension, Pydantic models
 - [ ] 03-02-PLAN.md — 12 gap detection rules and priority scoring formula
 - [ ] 03-03-PLAN.md — Confidence management (decay, reinforcement, conflict resolution) and 4-op update pipeline
@@ -93,7 +94,7 @@ Plans:
 ### Phase 5: Web UI + Cross-Project + Polish
 **Goal**: Users can visually explore the knowledge graph, share patterns across databases, and schedule background learning
 **Depends on**: Phase 4
-**Requirements**: MCP-06, CLI-05, UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, CROSS-01, CROSS-02, EXPORT-01, EXPORT-03
+**Requirements**: MCP-06, CLI-05, UI-01, UI-02, UI-03, UI-04, UI-05, UI-06, CROSS-01, CROSS-02, EXPORT-01, EXPORT-03, LEARN-13
 **Success Criteria** (what must be TRUE):
   1. User can open a local web page and see the knowledge graph rendered with node color coding, edge labels, confidence heat-mapping, and gap highlighting
   2. User can click a node to expand its neighbors and view the L1/L2 wiki detail in a side panel
