@@ -124,7 +124,10 @@ def run_learning_loop(conn: sqlite3.Connection, config: DBWikiConfig) -> str:
                 )
                 conn.commit()
             except Exception:
-                pass
+                logger.warning(
+                    "Failed to bump attempt count for gap %d during error recovery",
+                    gap.id, exc_info=True,
+                )
 
     summary = f"Discovered {len(new_gaps)} gaps, processed {processed_count}, approved {approved_count}"
     logger.info("Learning loop complete: %s", summary)
