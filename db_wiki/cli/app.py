@@ -289,38 +289,39 @@ def search(
 
     config = load_config(store_path)
     conn = open_store(db_path)
-    init_schema(conn)
-    sync_fts(conn)
+    try:
+        init_schema(conn)
+        sync_fts(conn)
 
-    vec_weight = 1.0 - fts_weight
-    results = hybrid_search(
-        conn,
-        query,
-        config.embedding,
-        fts_weight=fts_weight,
-        vec_weight=vec_weight,
-        limit=limit,
-    )
-
-    if not results:
-        typer.echo(f"No results for: {query}")
-        conn.close()
-        return
-
-    if output_format == "json":
-        import json
-
-        typer.echo(
-            json.dumps(
-                [{"type": r[0], "id": r[1], "score": r[2]} for r in results], indent=2
-            )
+        vec_weight = 1.0 - fts_weight
+        results = hybrid_search(
+            conn,
+            query,
+            config.embedding,
+            fts_weight=fts_weight,
+            vec_weight=vec_weight,
+            limit=limit,
         )
-    else:
-        typer.echo(f"Results for '{query}':")
-        for entity_type, entity_id, score in results:
-            name = lookup_entity_name(conn, entity_id)
-            typer.echo(f"  [{entity_type}] {name} (score={score:.3f})")
-    conn.close()
+
+        if not results:
+            typer.echo(f"No results for: {query}")
+            return
+
+        if output_format == "json":
+            import json
+
+            typer.echo(
+                json.dumps(
+                    [{"type": r[0], "id": r[1], "score": r[2]} for r in results], indent=2
+                )
+            )
+        else:
+            typer.echo(f"Results for '{query}':")
+            for entity_type, entity_id, score in results:
+                name = lookup_entity_name(conn, entity_id)
+                typer.echo(f"  [{entity_type}] {name} (score={score:.3f})")
+    finally:
+        conn.close()
 
 
 @app.command()
@@ -347,30 +348,30 @@ def lineage(
     from db_wiki.graph.bfs import bfs_graph
 
     conn = open_store(db_path)
-    init_schema(conn)
+    try:
+        init_schema(conn)
 
-    entity_id, entity_type = find_entity_by_name(conn, entity_name)
-    if entity_id is None:
-        typer.echo(f"Entity not found: {entity_name}", err=True)
+        entity_id, entity_type = find_entity_by_name(conn, entity_name)
+        if entity_id is None:
+            typer.echo(f"Entity not found: {entity_name}", err=True)
+            raise typer.Exit(code=1)
+
+        types_list = [t.strip() for t in edge_types.split(",") if t.strip()] or None
+
+        results = bfs_graph(conn, entity_id, max_depth=max_depth, edge_types=types_list)
+
+        if len(results) <= 1:
+            typer.echo(f"No relationships found for {entity_name}")
+            return
+
+        typer.echo(f"Lineage from {entity_name} ({entity_type}, depth {max_depth}):")
+        for r in results:
+            node_name = lookup_entity_name(conn, r["node_id"])
+            indent = "  " * r["depth"]
+            edge_label = f" --[{r['edge_type']}]--> " if r["edge_type"] else ""
+            typer.echo(f"{indent}{edge_label}{node_name} (depth {r['depth']})")
+    finally:
         conn.close()
-        raise typer.Exit(code=1)
-
-    types_list = [t.strip() for t in edge_types.split(",") if t.strip()] or None
-
-    results = bfs_graph(conn, entity_id, max_depth=max_depth, edge_types=types_list)
-
-    if len(results) <= 1:
-        typer.echo(f"No relationships found for {entity_name}")
-        conn.close()
-        return
-
-    typer.echo(f"Lineage from {entity_name} ({entity_type}, depth {max_depth}):")
-    for r in results:
-        node_name = lookup_entity_name(conn, r["node_id"])
-        indent = "  " * r["depth"]
-        edge_label = f" --[{r['edge_type']}]--> " if r["edge_type"] else ""
-        typer.echo(f"{indent}{edge_label}{node_name} (depth {r['depth']})")
-    conn.close()
 
 
 @app.command(name="sp-info")
