@@ -263,6 +263,208 @@ def ingest(
             typer.echo(f"  - {w}")
 
 
+@app.command()
+def search(
+    query: str = typer.Argument(..., help="Search query (natural language or keywords)"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+    limit: int = typer.Option(10, "--limit", "-n", help="Maximum results"),
+    fts_weight: float = typer.Option(0.5, "--fts-weight", help="FTS5 keyword weight (0-1)"),
+    output_format: str = typer.Option(
+        "table", "--format", "-f", help="Output format: table or json"
+    ),
+) -> None:
+    """Search the knowledge store for tables, procedures, and columns."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    from db_wiki.core.config import load_config
+    from db_wiki.core.queries import lookup_entity_name
+    from db_wiki.search.fts import sync_fts
+    from db_wiki.search.hybrid import hybrid_search
+
+    config = load_config(store_path)
+    conn = open_store(db_path)
+    init_schema(conn)
+    sync_fts(conn)
+
+    vec_weight = 1.0 - fts_weight
+    results = hybrid_search(
+        conn,
+        query,
+        config.embedding,
+        fts_weight=fts_weight,
+        vec_weight=vec_weight,
+        limit=limit,
+    )
+
+    if not results:
+        typer.echo(f"No results for: {query}")
+        conn.close()
+        return
+
+    if output_format == "json":
+        import json
+
+        typer.echo(
+            json.dumps(
+                [{"type": r[0], "id": r[1], "score": r[2]} for r in results], indent=2
+            )
+        )
+    else:
+        typer.echo(f"Results for '{query}':")
+        for entity_type, entity_id, score in results:
+            name = lookup_entity_name(conn, entity_id)
+            typer.echo(f"  [{entity_type}] {name} (score={score:.3f})")
+    conn.close()
+
+
+@app.command()
+def lineage(
+    entity_name: str = typer.Argument(..., help="Table or procedure name"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+    max_depth: int = typer.Option(
+        3, "--max-depth", "-d", help="Maximum traversal depth"
+    ),
+    edge_types: str = typer.Option(
+        "", "--edge-types", "-e", help="Comma-separated: fk_declared,reads_from,..."
+    ),
+) -> None:
+    """Trace data lineage from an entity through the relationship graph."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    from db_wiki.core.queries import find_entity_by_name, lookup_entity_name
+    from db_wiki.graph.bfs import bfs_graph
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    entity_id, entity_type = find_entity_by_name(conn, entity_name)
+    if entity_id is None:
+        typer.echo(f"Entity not found: {entity_name}", err=True)
+        conn.close()
+        raise typer.Exit(code=1)
+
+    types_list = [t.strip() for t in edge_types.split(",") if t.strip()] or None
+
+    results = bfs_graph(conn, entity_id, max_depth=max_depth, edge_types=types_list)
+
+    if len(results) <= 1:
+        typer.echo(f"No relationships found for {entity_name}")
+        conn.close()
+        return
+
+    typer.echo(f"Lineage from {entity_name} ({entity_type}, depth {max_depth}):")
+    for r in results:
+        node_name = lookup_entity_name(conn, r["node_id"])
+        indent = "  " * r["depth"]
+        edge_label = f" --[{r['edge_type']}]--> " if r["edge_type"] else ""
+        typer.echo(f"{indent}{edge_label}{node_name} (depth {r['depth']})")
+    conn.close()
+
+
+@app.command(name="sp-info")
+def sp_info(
+    procedure_name: str = typer.Argument(..., help="Stored procedure name"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Show detailed information about a stored procedure."""
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo("Error: No knowledge store. Run 'db-wiki init' first.", err=True)
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    row = conn.execute(
+        "SELECT id, procedure_name, schema_name, description, body_hash "
+        "FROM current_db_procedures WHERE procedure_name=?",
+        (procedure_name,),
+    ).fetchone()
+
+    if not row:
+        typer.echo(f"Procedure not found: {procedure_name}", err=True)
+        conn.close()
+        raise typer.Exit(code=1)
+
+    proc_id = row[0]
+    typer.echo(f"Procedure: {row[1]}")
+    typer.echo(f"Schema: {row[2] or 'dbo'}")
+    typer.echo(f"Body hash: {row[4] or 'N/A'}")
+
+    # Parse quality (D-03)
+    rel_row = conn.execute(
+        "SELECT parse_quality, is_degraded, has_dynamic_sql, partial_ast, has_cycle "
+        "FROM current_sp_reliability WHERE procedure_id=?",
+        (proc_id,),
+    ).fetchone()
+    if rel_row:
+        typer.echo(f"\nParse quality: {rel_row[0]:.2%}")
+        if rel_row[1]:
+            typer.echo("  WARNING: Parse quality degraded (>5% anonymous nodes)")
+        if rel_row[2]:
+            typer.echo("  Contains dynamic SQL")
+        if rel_row[3]:
+            typer.echo("  Partial AST (Command fallback nodes present)")
+        if rel_row[4]:
+            typer.echo("  Circular call chain detected")
+
+    # Branches
+    branches = conn.execute(
+        "SELECT branch_type, condition_text, tables_touched_json, nesting_depth "
+        "FROM current_sp_branches WHERE procedure_id=? ORDER BY branch_index",
+        (proc_id,),
+    ).fetchall()
+    if branches:
+        typer.echo(f"\nBranches ({len(branches)}):")
+        for b in branches:
+            cond = f": {b[1]}" if b[1] else ""
+            tables = b[2] or "[]"
+            typer.echo(f"  [{b[0]}] depth={b[3]}{cond} tables={tables}")
+
+    # Call chains
+    chains = conn.execute(
+        "SELECT callee_name_raw, callee_schema, is_resolved "
+        "FROM current_sp_call_chains WHERE caller_id=?",
+        (proc_id,),
+    ).fetchall()
+    if chains:
+        typer.echo(f"\nCall chains ({len(chains)}):")
+        for c in chains:
+            resolved = "resolved" if c[2] else "unresolved"
+            schema = f"{c[1]}." if c[1] else ""
+            typer.echo(f"  EXEC {schema}{c[0]} ({resolved})")
+
+    # Relationships
+    rels = conn.execute(
+        "SELECT r.relationship_type, t.table_name "
+        "FROM current_db_relationships r "
+        "JOIN current_db_tables t ON r.target_id = t.id "
+        "WHERE r.source_id=?",
+        (proc_id,),
+    ).fetchall()
+    if rels:
+        typer.echo(f"\nRelationships ({len(rels)}):")
+        for r in rels:
+            typer.echo(f"  {r[0]}: {r[1]}")
+
+    conn.close()
+
+
 def main() -> None:
     """Entry point for the db-wiki CLI."""
     app()
