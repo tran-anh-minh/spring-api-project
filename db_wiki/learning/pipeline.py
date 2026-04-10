@@ -159,11 +159,15 @@ def apply_findings(
                 fact_b_ts=now_ts,
             )
 
-            if strategy.startswith("SUPERSEDE"):
+            if strategy == "SUPERSEDE_A":
+                # Fact B (new finding) wins over Fact A (existing)
                 _invalidate_row(conn, item.attribute, existing["id"], now_ts, now_iso)
                 _write_new_fact(conn, item.entity_type, item.entity_name,
                                 item.attribute, item.value, item.confidence,
                                 item.source, now_ts, now_iso)
+            elif strategy == "SUPERSEDE_B":
+                # Fact A (existing) wins — discard new finding, no changes needed
+                pass
             elif strategy == "KEEP":
                 _write_new_fact(conn, item.entity_type, item.entity_name,
                                 item.attribute, item.value, item.confidence,
@@ -333,6 +337,9 @@ def _invalidate_row(
     table = _table_for_attribute(attribute)
     if table is None:
         return
+    # Defense-in-depth: validate table is from known set (CR-01)
+    _VALID_TABLES = ("enum_values", "bitmask_definitions", "column_aliases")
+    assert table in _VALID_TABLES, f"Unexpected table name: {table}"
     conn.execute(
         f"UPDATE {table} SET invalidated_at = ?, invalidated_at_ts = ? "
         f"WHERE id = ? AND invalidated_at IS NULL",
