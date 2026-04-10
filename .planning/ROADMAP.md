@@ -67,7 +67,15 @@ Plans:
   3. Conflict between two sources produces SUPERSEDE/KEEP/SPLIT/ESCALATE resolution with logged rationale
   4. Confidence decays over time for stale facts and is reinforced when new evidence supports existing knowledge
   5. Gap cooldown prevents the same gap from being re-created infinitely across loop iterations
-**Plans**: TBD
+**Plans:** 6 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Learning schema (knowledge_gaps, agent_tasks, agent_results), config extension, Pydantic models
+- [ ] 03-02-PLAN.md — 12 gap detection rules and priority scoring formula
+- [ ] 03-03-PLAN.md — Confidence management (decay, reinforcement, conflict resolution) and 4-op update pipeline
+- [ ] 03-04-PLAN.md — Agent framework: Collector, Research, Review agents with LLM fallback
+- [ ] 03-05-PLAN.md — Learning loop orchestrator (Discover -> Investigate -> Reason -> Validate -> Consolidate)
+- [ ] 03-06-PLAN.md — MCP tools (discover, confirm, teach) and CLI commands
 
 ### Phase 4: Query Engine
 **Goal**: Users can ask natural language questions and receive accurate, validated SQL with full schema context
@@ -104,6 +112,6 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 |-------|----------------|--------|-----------|
 | 1. Foundation | 0/3 | Planning complete | - |
 | 2. SP Parsing + Knowledge Graph | 0/5 | Planning complete | - |
-| 3. Learning Loop | 0/TBD | Not started | - |
+| 3. Learning Loop | 0/6 | Planning complete | - |
 | 4. Query Engine | 0/TBD | Not started | - |
 | 5. Web UI + Cross-Project + Polish | 0/TBD | Not started | - |
