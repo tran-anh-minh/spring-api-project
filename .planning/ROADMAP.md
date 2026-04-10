@@ -47,8 +47,15 @@ Plans:
   3. Relationship graph (fk_declared, fk_inferred, joins_with, reads_from, writes_to, feeds_into) is queryable via BFS
   4. Enum and bitmask values are detected and labeled from CASE statements and SP names
   5. Hybrid search (vector + FTS5) returns relevant entities when searching by partial name or description
-**Plans**: TBD
+**Plans:** 5 plans
 **UI hint**: no
+
+Plans:
+- [ ] 02-01-PLAN.md — Phase 2 schema tables, SP Pydantic models, sqlite-vec store integration, embedding config
+- [ ] 02-02-PLAN.md — SP parser module with three-pass extraction, batch ingest, CLI ingest extension
+- [ ] 02-03-PLAN.md — Search infrastructure: lazy-loaded embedder, FTS5 index, hybrid score fusion
+- [ ] 02-04-PLAN.md — Python BFS graph traversal with edge type filtering and cycle detection
+- [ ] 02-05-PLAN.md — MCP tools (search, lineage, sp_info) and CLI commands
 
 ### Phase 3: Learning Loop
 **Goal**: The system autonomously identifies knowledge gaps and deepens its understanding through iterative investigation
@@ -96,7 +103,7 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 1. Foundation | 0/3 | Planning complete | - |
-| 2. SP Parsing + Knowledge Graph | 0/TBD | Not started | - |
+| 2. SP Parsing + Knowledge Graph | 0/5 | Planning complete | - |
 | 3. Learning Loop | 0/TBD | Not started | - |
 | 4. Query Engine | 0/TBD | Not started | - |
 | 5. Web UI + Cross-Project + Polish | 0/TBD | Not started | - |
