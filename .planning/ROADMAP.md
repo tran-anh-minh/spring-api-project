@@ -72,11 +72,11 @@ Plans:
 Plans:
 - [x] 03-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
 - [x] 03-01-PLAN.md — Learning schema (knowledge_gaps, agent_tasks, agent_results), config extension, Pydantic models
-- [ ] 03-02-PLAN.md — 12 gap detection rules and priority scoring formula
-- [ ] 03-03-PLAN.md — Confidence management (decay, reinforcement, conflict resolution) and 4-op update pipeline
-- [ ] 03-04-PLAN.md — Agent framework: Collector, Research, Review agents with LLM fallback
-- [ ] 03-05-PLAN.md — Learning loop orchestrator (Discover -> Investigate -> Reason -> Validate -> Consolidate)
-- [ ] 03-06-PLAN.md — MCP tools (discover, confirm, teach) and CLI commands
+- [x] 03-02-PLAN.md — 12 gap detection rules and priority scoring formula
+- [x] 03-03-PLAN.md — Confidence management (decay, reinforcement, conflict resolution) and 4-op update pipeline
+- [x] 03-04-PLAN.md — Agent framework: Collector, Research, Review agents with LLM fallback
+- [x] 03-05-PLAN.md — Learning loop orchestrator (Discover -> Investigate -> Reason -> Validate -> Consolidate)
+- [x] 03-06-PLAN.md — MCP tools (discover, confirm, teach) and CLI commands
 
 ### Phase 4: Query Engine
 **Goal**: Users can ask natural language questions and receive accurate, validated SQL with full schema context
