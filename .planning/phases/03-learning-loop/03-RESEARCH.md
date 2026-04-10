@@ -1061,22 +1061,13 @@ entity_id = row["entity_id"]    # correct
 
 ---
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **anyio availability via mcp SDK**
-   - What we know: mcp SDK 1.x uses anyio internally for async transport
-   - What's unclear: whether anyio is re-exported or needs explicit dep
-   - Recommendation: Add `anyio>=4.0` to pyproject.toml explicitly to be safe
+1. **anyio availability via mcp SDK** — RESOLVED: Available as transitive dep via mcp SDK. Plan 03-06 adds `anyio>=4.0` explicitly to pyproject.toml for safety.
 
-2. **agent_results `findings_json` schema**
-   - What we know: Must be parseable by Consolidate phase to apply changes
-   - What's unclear: Exact JSON structure (list of proposed fact updates?)
-   - Recommendation: Define a `FindingsList` Pydantic model; serialize with `.model_dump_json()`; deserialize with `model_validate_json()` in Consolidate
+2. **agent_results `findings_json` schema** — RESOLVED: `AgentFindings` Pydantic model with `FindingItem` list. Serialized via `.model_dump_json()`, deserialized with `model_validate_json()` in Consolidate. Defined in Plan 03-01 models.py.
 
-3. **confirm / teach MCP tool — which tables to write to**
-   - What we know: Human-confirmed facts should be stored at confidence=1.0
-   - What's unclear: Should they write to `enum_values` directly (existing table), or a separate `human_facts` table?
-   - Recommendation: Write to the relevant domain table (enum_values, column_aliases, etc.) with `detection_method='human_confirmed'` and confidence=1.0. No separate table needed.
+3. **confirm / teach MCP tool — which tables to write to** — RESOLVED: Write to relevant domain tables (enum_values, column_aliases, bitmask_definitions, db_tables, db_procedures) with `detection_method='human_confirmed'` and confidence=1.0. No separate table needed. Plan 03-06 Task 1 implements this in `confirm.py`.
 
 ---
 
