@@ -32,7 +32,8 @@ def fuse_scores(
         max_abs = max(abs(r[3]) for r in fts_results) or 1.0
         for r in fts_results:
             key = (r[0], r[2])  # (entity_type, entity_id)
-            fts_scores[key] = abs(r[3]) / max_abs
+            # Less negative = better, so invert: 1 - (abs(rank) / max_abs)
+            fts_scores[key] = 1.0 - (abs(r[3]) / max_abs)
             fts_names[key] = r[1]
 
     # Normalize vec scores
