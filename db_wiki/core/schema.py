@@ -105,7 +105,7 @@ WHERE valid_until IS NULL
 CREATE TABLE IF NOT EXISTS db_relationships (
     id                  INTEGER PRIMARY KEY AUTOINCREMENT,
     source_id           INTEGER NOT NULL,
-    target_id           INTEGER NOT NULL,
+    target_id           INTEGER,          -- NULL when target entity unresolved
     relationship_type   TEXT NOT NULL,   -- fk_declared|fk_inferred|joins_with|reads_from|writes_to|feeds_into
     source_column       TEXT,
     target_column       TEXT,

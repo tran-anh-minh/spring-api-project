@@ -379,8 +379,8 @@ class TestFuseScores:
         fts = [("table", "Orders", 1, -5.0), ("table", "Customers", 2, -2.0)]
         result = fuse_scores(fts, [], fts_weight=1.0, vec_weight=0.0)
         assert len(result) == 2
-        # Higher abs rank = higher score when fts_weight=1.0
-        assert result[0][1] == 1  # Orders has higher abs rank
+        # Less negative rank = better FTS match = higher score
+        assert result[0][1] == 2  # Customers (-2.0) is better match than Orders (-5.0)
         assert result[0][2] > result[1][2]
 
     def test_vec_only_results(self):
