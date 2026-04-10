@@ -36,7 +36,10 @@ class Embedder:
 
     @property
     def vec_table_name(self) -> str:
-        return f"vec_embeddings_{self.dimensions}"
+        name = f"vec_embeddings_{self.dimensions}"
+        if not name.isidentifier():
+            raise ValueError(f"Invalid vec table name: {name}")
+        return name
 
     def ensure_ready(self) -> None:
         """Lazy-load the embedding model. First call downloads model if needed."""
