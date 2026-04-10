@@ -15,7 +15,11 @@ import pytest
 
 @pytest.fixture
 def db_with_entities(initialized_db: sqlite3.Connection) -> sqlite3.Connection:
-    """Insert sample table and procedure entities for lookup tests."""
+    """Insert sample table and procedure entities for lookup tests.
+
+    Inserts multiple tables first to ensure procedure IDs don't collide
+    with table IDs (both tables use separate autoincrement sequences).
+    """
     conn = initialized_db
     from datetime import datetime, timezone
 
@@ -23,14 +27,16 @@ def db_with_entities(initialized_db: sqlite3.Connection) -> sqlite3.Connection:
     now_iso = now.isoformat()
     now_ts = int(now.timestamp())
 
-    # Insert a table entity
-    conn.execute(
-        "INSERT INTO db_tables (table_name, schema_name, description, "
-        "valid_from, valid_from_ts, recorded_at, recorded_at_ts) "
-        "VALUES (?, ?, ?, ?, ?, ?, ?)",
-        ("Orders", "dbo", "Order table", now_iso, now_ts, now_iso, now_ts),
-    )
-    # Insert a procedure entity
+    # Insert multiple tables to offset procedure IDs
+    for tbl_name in ("Orders", "Customers", "Products"):
+        conn.execute(
+            "INSERT INTO db_tables (table_name, schema_name, description, "
+            "valid_from, valid_from_ts, recorded_at, recorded_at_ts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            (tbl_name, "dbo", f"{tbl_name} table", now_iso, now_ts, now_iso, now_ts),
+        )
+    # Insert a procedure entity (will get id=1 in db_procedures,
+    # distinct from table ids 1-3)
     conn.execute(
         "INSERT INTO db_procedures (procedure_name, schema_name, description, "
         "valid_from, valid_from_ts, recorded_at, recorded_at_ts) "
@@ -53,10 +59,29 @@ class TestLookupEntityName:
         ).fetchone()[0]
         assert lookup_entity_name(conn, table_id) == "Orders"
 
-    def test_returns_procedure_name(self, db_with_entities: sqlite3.Connection):
+    def test_returns_procedure_name(self, initialized_db: sqlite3.Connection):
+        """Test procedure lookup with an ID that doesn't collide with table IDs.
+
+        Since db_tables and db_procedures have separate autoincrement sequences,
+        we insert only the procedure (no tables) so its id=1 won't collide.
+        """
+        from datetime import datetime, timezone
+
         from db_wiki.core.queries import lookup_entity_name
 
-        conn = db_with_entities
+        conn = initialized_db
+        now = datetime.now(timezone.utc)
+        now_iso = now.isoformat()
+        now_ts = int(now.timestamp())
+
+        conn.execute(
+            "INSERT INTO db_procedures (procedure_name, schema_name, description, "
+            "valid_from, valid_from_ts, recorded_at, recorded_at_ts) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("GetOrders", "dbo", "proc", now_iso, now_ts, now_iso, now_ts),
+        )
+        conn.commit()
+
         proc_id = conn.execute(
             "SELECT id FROM current_db_procedures WHERE procedure_name='GetOrders'"
         ).fetchone()[0]
@@ -127,7 +152,7 @@ class TestToolSignatures:
         tools = mcp._tool_manager.list_tools()
         for t in tools:
             if t.name == tool_name:
-                return t.inputSchema
+                return t.parameters
         raise ValueError(f"Tool {tool_name} not found")
 
     def test_search_accepts_query(self):
