@@ -10,6 +10,8 @@ import sqlite3
 
 logger = logging.getLogger(__name__)
 
+_VALID_COLUMNS = {"source_id", "target_id"}
+
 
 def bfs_graph(
     conn: sqlite3.Connection,
@@ -100,6 +102,8 @@ def _get_neighbors(
     Returns:
         List of (neighbor_id, relationship_type) tuples.
     """
+    if match_col not in _VALID_COLUMNS or return_col not in _VALID_COLUMNS:
+        raise ValueError(f"Invalid column name: {match_col}, {return_col}")
     if edge_types:
         placeholders = ",".join("?" * len(edge_types))
         rows = conn.execute(
