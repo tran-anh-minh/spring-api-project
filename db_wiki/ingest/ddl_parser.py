@@ -380,8 +380,9 @@ def ingest_ddl(conn: sqlite3.Connection, parse_result: ParseResult) -> dict[str,
     Returns:
         Dictionary with counts: {"tables": N, "columns": N, "relationships": N, "indexes": N}
     """
-    now_iso = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    now_ts = int(datetime.now(timezone.utc).timestamp())
+    now = datetime.now(timezone.utc)
+    now_iso = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    now_ts = int(now.timestamp())
 
     table_counts = 0
     column_counts = 0
