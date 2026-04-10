@@ -132,13 +132,21 @@ class TestEmbedderEnsureReady:
 class TestEmbedderEncode:
     def test_encode_returns_float_lists(self, config_local):
         """Mocked encode returns vectors with correct dimensions."""
-        import numpy as np
-
         from db_wiki.search.embedder import Embedder
 
         embedder = Embedder(config_local)
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.random.rand(2, 384).astype(np.float32)
+
+        # Create a mock numpy-like array that supports .tolist()
+        class FakeArray:
+            def __init__(self, data):
+                self._data = data
+
+            def tolist(self):
+                return self._data
+
+        fake_result = [FakeArray([0.1] * 384), FakeArray([0.2] * 384)]
+        mock_model.encode.return_value = fake_result
         embedder._model = mock_model
         embedder._ready = True
 
@@ -148,16 +156,27 @@ class TestEmbedderEncode:
         assert all(isinstance(v, float) for v in result[0])
 
 
+def _fake_vectors(n: int, dim: int, fill: float = 0.1) -> list:
+    """Create fake numpy-like array results for mocked model.encode()."""
+
+    class FakeArray:
+        def __init__(self, data):
+            self._data = data
+
+        def tolist(self):
+            return self._data
+
+    return [FakeArray([fill + i * 0.01] * dim) for i in range(n)]
+
+
 class TestEmbedderEmbedEntities:
     def test_embed_entities_inserts_vectors(self, search_db, config_local):
         """embed_entities should insert vectors into vec table."""
-        import numpy as np
-
         from db_wiki.search.embedder import Embedder
 
         embedder = Embedder(config_local)
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.random.rand(2, 384).astype(np.float32)
+        mock_model.encode.return_value = _fake_vectors(2, 384)
         embedder._model = mock_model
         embedder._ready = True
 
@@ -181,13 +200,11 @@ class TestEmbedderEmbedEntities:
 
     def test_embed_entities_creates_vec_table(self, search_db, config_local):
         """init_vec_table should be called to create the table if needed."""
-        import numpy as np
-
         from db_wiki.search.embedder import Embedder
 
         embedder = Embedder(config_local)
         mock_model = MagicMock()
-        mock_model.encode.return_value = np.random.rand(1, 384).astype(np.float32)
+        mock_model.encode.return_value = _fake_vectors(1, 384)
         embedder._model = mock_model
         embedder._ready = True
 
@@ -204,18 +221,14 @@ class TestEmbedderEmbedEntities:
 class TestEmbedderSearchSimilar:
     def test_search_similar_returns_tuples(self, search_db, config_local):
         """search_similar returns (entity_type, entity_id, distance) tuples."""
-        import numpy as np
-
         from db_wiki.search.embedder import Embedder
 
         embedder = Embedder(config_local)
         mock_model = MagicMock()
         # Use deterministic vectors for insert and query
-        vec1 = np.ones(384, dtype=np.float32) * 0.1
-        vec2 = np.ones(384, dtype=np.float32) * 0.9
         mock_model.encode.side_effect = [
-            np.array([vec1, vec2]),  # embed_entities call
-            np.array([vec1]),  # search_similar query call
+            _fake_vectors(2, 384, fill=0.1),  # embed_entities call
+            _fake_vectors(1, 384, fill=0.1),  # search_similar query call
         ]
         embedder._model = mock_model
         embedder._ready = True

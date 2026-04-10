@@ -17,6 +17,10 @@ dependencies = [
 db-wiki = "db_wiki.cli.app:main"
 db-wiki-mcp = "db_wiki.server.app:main"
 
+[project.optional-dependencies]
+embed = ["sentence-transformers>=3.0,<6"]
+openai-embed = ["openai>=1.0,<2"]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
