@@ -32,12 +32,23 @@ class IngestConfig(BaseModel):
     max_file_size_mb: int = 50
 
 
+class EmbeddingConfig(BaseModel):
+    """Embedding provider settings (CONFIG-01)."""
+
+    provider: str = "local"  # "local" or "openai"
+    model_name: str = "all-MiniLM-L6-v2"
+    dimensions: int = 384
+    openai_model: str = "text-embedding-3-small"
+    openai_dimensions: int = 1536
+
+
 class DBWikiConfig(BaseModel):
     """Top-level configuration for db-wiki."""
 
     storage: StorageConfig = StorageConfig()
     database: DatabaseConfig = DatabaseConfig()
     ingest: IngestConfig = IngestConfig()
+    embedding: EmbeddingConfig = EmbeddingConfig()
 
 
 def load_config(store_path: Path) -> DBWikiConfig:
