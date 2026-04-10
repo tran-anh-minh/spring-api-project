@@ -116,6 +116,10 @@ def write_default_config(store_path: Path) -> None:
     config = DBWikiConfig()
     config_file = store_path / "config.yaml"
     config_file.write_text(
-        yaml.dump(config.model_dump(), default_flow_style=False, sort_keys=True),
+        yaml.dump(
+            config.model_dump(exclude={"learning": {"llm_api_key"}}),
+            default_flow_style=False,
+            sort_keys=True,
+        ),
         encoding="utf-8",
     )
