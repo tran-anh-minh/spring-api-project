@@ -33,9 +33,9 @@ Decimal phases appear between their surrounding integers in numeric order.
 **Plans:** 3 plans
 
 Plans:
-- [ ] 01-01-PLAN.md — Project scaffold, SQLite bi-temporal schema, YAML config system
-- [ ] 01-02-PLAN.md — DDL parser and ingest pipeline (sqlglot)
-- [ ] 01-03-PLAN.md — FastMCP server skeleton and Typer CLI
+- [x] 01-01-PLAN.md — Project scaffold, SQLite bi-temporal schema, YAML config system
+- [x] 01-02-PLAN.md — DDL parser and ingest pipeline (sqlglot)
+- [x] 01-03-PLAN.md — FastMCP server skeleton and Typer CLI
 
 ### Phase 2: SP Parsing + Knowledge Graph
 **Goal**: Users can ingest stored procedures and explore the full relationship graph between tables and SPs
