@@ -92,11 +92,11 @@ Plans:
 **UI hint**: no
 
 Plans:
-- [ ] 04-01-PLAN.md — Schema extension, concept resolver, wiki page generator
-- [ ] 04-02-PLAN.md — Query tier classifier, L0/L1/L2 context assembler, SQL generator, validator
-- [ ] 04-03-PLAN.md — Query pipeline orchestrator, cache, live executor, Analyst Agent
-- [ ] 04-04-PLAN.md — MCP tools (ask, explain, define_metric, analysis tools)
-- [ ] 04-05-PLAN.md — CLI commands mirroring all MCP tools
+- [x] 04-01-PLAN.md — Schema extension, concept resolver, wiki page generator
+- [x] 04-02-PLAN.md — Query tier classifier, L0/L1/L2 context assembler, SQL generator, validator
+- [x] 04-03-PLAN.md — Query pipeline orchestrator, cache, live executor, Analyst Agent
+- [x] 04-04-PLAN.md — MCP tools (ask, explain, define_metric, analysis tools)
+- [x] 04-05-PLAN.md — CLI commands mirroring all MCP tools
 
 ### Phase 5: Web UI + Cross-Project + Polish
 **Goal**: Users can visually explore the knowledge graph, share patterns across databases, and schedule background learning
