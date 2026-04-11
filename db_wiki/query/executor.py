@@ -17,7 +17,31 @@ from __future__ import annotations
 
 import logging
 
+import sqlglot
+from sqlglot.errors import ParseError
+
 logger = logging.getLogger(__name__)
+
+
+def _is_safe_select(sql: str) -> bool:
+    """Check that sql contains exactly one SELECT statement using AST parsing.
+
+    Rejects multi-statement SQL, non-SELECT statements, CTEs wrapping
+    destructive operations, and comment-prefixed bypasses.
+    """
+    if not sql or not sql.strip():
+        return False
+    try:
+        statements = sqlglot.parse(sql, dialect="tsql")
+    except ParseError:
+        return False
+    if len(statements) != 1:
+        return False  # reject multi-statement (e.g. SELECT 1; DROP TABLE x)
+    stmt = statements[0]
+    if stmt is None:
+        return False
+    # Accept Select nodes (includes CTEs that resolve to SELECT)
+    return isinstance(stmt, sqlglot.exp.Select)
 
 
 def execute_query(sql: str, config) -> dict:
@@ -34,8 +58,8 @@ def execute_query(sql: str, config) -> dict:
           - error (str | None): Error message string, or None on success.
           - row_count (int): Number of rows returned (0 on failure).
     """
-    # T-04-06: Only SELECT statements can be executed
-    if not sql or not sql.strip().upper().startswith("SELECT"):
+    # T-04-06: Only SELECT statements can be executed (AST-based check)
+    if not _is_safe_select(sql):
         return {
             "success": False,
             "rows": None,
