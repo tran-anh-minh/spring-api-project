@@ -1,14 +1,26 @@
 """Typer CLI for the db-wiki knowledge engine.
 
 Commands:
-  init    — Create .db-wiki/ directory with config.yaml and knowledge.db
-  connect — Register a live database connection string in config.yaml
-  ingest  — Parse and ingest SQL files (DDL or SP) into the knowledge store
+  init           — Create .db-wiki/ directory with config.yaml and knowledge.db
+  connect        — Register a live database connection string in config.yaml
+  ingest         — Parse and ingest SQL files (DDL or SP) into the knowledge store
+  ask            — Ask a natural language question and get SQL
+  explain        — Generate wiki page for a table or procedure
+  define-metric  — Define a named business metric (SQL expression)
+  state-machine  — Show state transitions for a table column
+  branch-analysis — Show branch analysis for a stored procedure
+  impact         — Show entities affected by an entity (BFS traversal)
+  coverage       — Show knowledge coverage statistics
+  data-quality   — Show knowledge gaps and data quality issues
+  forensics      — Trace data lineage (upstream/downstream)
+  compare        — Compare two entities side by side
 
 Security notes:
 - T-03-01: store_path resolved to absolute with Path.resolve() to prevent
   path traversal via --store-path (e.g., --store-path ../../../etc)
 - T-02-05: All user-supplied paths resolved before file operations
+- T-04-14: ask --execute passes SQL through QueryPipeline validator (SELECT-only)
+- T-04-15: define-metric validates SQL expression via sqlglot before storage
 """
 from pathlib import Path
 from typing import Optional
@@ -57,6 +69,8 @@ def init(
 
     conn = open_store(db_path)
     init_schema(conn)
+    from db_wiki.core.query_schema import init_query_schema
+    init_query_schema(conn)
     conn.close()
     typer.echo(f"Created {db_path}")
 
@@ -549,6 +563,666 @@ def teach(
         typer.echo(result)
     finally:
         conn.close()
+
+
+def _open_store_with_query_schema(store_path: Path):
+    """Open the knowledge store and ensure both base and query schemas are initialized.
+
+    Returns (conn, config) tuple. Caller is responsible for closing conn.
+    Raises typer.Exit(code=1) if the store does not exist.
+    """
+    db_path = store_path / "knowledge.db"
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    from db_wiki.core.query_schema import init_query_schema
+
+    config = load_config(store_path)
+    conn = open_store(db_path)
+    init_schema(conn)
+    init_query_schema(conn)
+    return conn, config
+
+
+@app.command()
+def ask(
+    question: str = typer.Argument(help="Natural language question"),
+    execute: bool = typer.Option(False, "--execute", "-e", help="Execute SQL against live DB"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    sql_only: bool = typer.Option(False, "--sql-only", "-s", help="Raw SQL only"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Store directory"
+    ),
+) -> None:
+    """Ask a natural language question and receive generated SQL.
+
+    Uses the Phase 4 QueryPipeline to classify, resolve, generate, and
+    validate SQL. Optionally executes the SQL against the live database
+    (requires --execute and a configured connection string).
+
+    Security: T-04-14 — SQL validated via sqlglot qualify(); --execute
+    requires explicit opt-in; executor rejects non-SELECT statements.
+    """
+    import json as json_mod
+
+    from db_wiki.query.pipeline import QueryPipeline
+
+    store_path = store_path.resolve()
+    conn, config = _open_store_with_query_schema(store_path)
+    try:
+        pipeline = QueryPipeline(conn, config)
+        result = pipeline.run(question, execute=execute)
+    finally:
+        conn.close()
+
+    if sql_only:
+        if result.sql:
+            typer.echo(result.sql)
+        else:
+            typer.echo("-- No SQL generated", err=True)
+            raise typer.Exit(code=1)
+        return
+
+    if json_output:
+        output = {
+            "question": result.question,
+            "tier": result.tier,
+            "sql": result.sql,
+            "attempts": result.attempts,
+            "from_cache": result.from_cache,
+            "validation_errors": result.validation_errors,
+            "execution_result": result.execution_result,
+        }
+        typer.echo(json_mod.dumps(output, indent=2))
+        return
+
+    # Rich output
+    try:
+        from rich.console import Console
+        from rich.panel import Panel
+        from rich.syntax import Syntax
+        from rich.table import Table
+
+        console = Console()
+        badge = f"[bold cyan]{result.tier}[/bold cyan]"
+        cache_note = " (cached)" if result.from_cache else ""
+        attempts_note = f"  attempts={result.attempts}{cache_note}"
+        sql_text = result.sql or "-- No SQL generated"
+        syntax = Syntax(sql_text, "sql", theme="monokai", line_numbers=False)
+        console.print(Panel(syntax, title=f"SQL — {badge}", subtitle=attempts_note))
+
+        if result.validation_errors:
+            console.print(f"[yellow]Validation warnings:[/yellow] {'; '.join(result.validation_errors)}")
+
+        if result.execution_result and result.execution_result.get("rows"):
+            rows = result.execution_result["rows"]
+            cols = result.execution_result.get("columns", [])
+            tbl = Table(*cols, show_header=True)
+            for row in rows[:50]:
+                tbl.add_row(*[str(v) for v in row])
+            console.print(tbl)
+
+    except ImportError:
+        # Fallback without rich
+        typer.echo(f"Tier: {result.tier}  attempts={result.attempts}")
+        typer.echo(result.sql or "-- No SQL generated")
+
+
+@app.command()
+def explain(
+    entity_name: str = typer.Argument(help="Table or procedure name"),
+    entity_type: str = typer.Option("table", "--type", "-t", help="Entity type: table or procedure"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Generate a wiki page for a table or stored procedure.
+
+    Outputs L0/L1/L2 combined markdown documentation for the named entity.
+    """
+    import json as json_mod
+
+    from db_wiki.core.queries import find_entity_by_name
+    from db_wiki.query.wiki import generate_wiki_markdown
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        entity_id, found_type = find_entity_by_name(conn, entity_name)
+        if entity_id is None:
+            typer.echo(f"Entity not found: {entity_name}", err=True)
+            raise typer.Exit(code=1)
+
+        resolved_type = found_type or entity_type
+        content = generate_wiki_markdown(conn, resolved_type, entity_id)
+    finally:
+        conn.close()
+
+    if json_output:
+        import json as json_mod
+        typer.echo(json_mod.dumps({"entity": entity_name, "type": resolved_type, "content": content}, indent=2))
+    else:
+        typer.echo(content)
+
+
+@app.command("define-metric")
+def define_metric_cmd(
+    name: str = typer.Argument(help="Metric name"),
+    expression: str = typer.Argument(help="SQL expression"),
+    tables: str = typer.Option("", "--tables", help="Comma-separated source tables"),
+    description: str = typer.Option("", "--description", "-d", help="Metric description"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Define a named business metric (SQL expression).
+
+    Stores the metric in the knowledge store for use by the query pipeline.
+    The SQL expression is validated via sqlglot before storage.
+
+    Security: T-04-15 — expression validated; dangerous DML/DDL keywords rejected.
+    """
+    from db_wiki.query.resolver import define_metric
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        source_tables = [t.strip() for t in tables.split(",") if t.strip()]
+        metric_id = define_metric(
+            conn,
+            name=name,
+            sql_fragment=expression,
+            source_tables=source_tables,
+            description=description or None,
+        )
+        typer.echo(f"Defined metric '{name}' (id={metric_id})")
+    except ValueError as exc:
+        typer.echo(f"Error: {exc}", err=True)
+        raise typer.Exit(code=1)
+    finally:
+        conn.close()
+
+
+@app.command("state-machine")
+def state_machine_cmd(
+    table_name: str = typer.Argument(help="Table name"),
+    column_name: str = typer.Argument(help="Column name"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Show state machine transitions for a table column as a Mermaid diagram."""
+    import json as json_mod
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        transitions = conn.execute(
+            "SELECT from_value, to_value, confidence "
+            "FROM current_state_transitions "
+            "WHERE table_name = ? AND column_name = ? "
+            "ORDER BY from_value, to_value",
+            (table_name, column_name),
+        ).fetchall()
+    finally:
+        conn.close()
+
+    if not transitions:
+        typer.echo(f"No state transitions found for {table_name}.{column_name}")
+        return
+
+    if json_output:
+        rows = [
+            {"from_value": r[0], "to_value": r[1], "confidence": r[2]}
+            for r in transitions
+        ]
+        typer.echo(json_mod.dumps({"table": table_name, "column": column_name, "transitions": rows}, indent=2))
+        return
+
+    # Mermaid state diagram
+    lines = ["stateDiagram-v2"]
+    for from_val, to_val, _ in transitions:
+        lines.append(f"    {from_val} --> {to_val}")
+    typer.echo("\n".join(lines))
+
+
+@app.command("branch-analysis")
+def branch_analysis_cmd(
+    procedure_name: str = typer.Argument(help="Stored procedure name"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Show branch analysis for a stored procedure."""
+    import json as json_mod
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        proc_row = conn.execute(
+            "SELECT id, procedure_name, description FROM current_db_procedures WHERE procedure_name = ?",
+            (procedure_name,),
+        ).fetchone()
+
+        if proc_row is None:
+            typer.echo(f"Procedure not found: {procedure_name}", err=True)
+            raise typer.Exit(code=1)
+
+        proc_id = proc_row[0]
+        branches = conn.execute(
+            "SELECT branch_index, branch_type, condition_text, tables_touched_json, nesting_depth "
+            "FROM current_sp_branches WHERE procedure_id = ? ORDER BY branch_index",
+            (proc_id,),
+        ).fetchall()
+
+        reliability = conn.execute(
+            "SELECT parse_quality, is_degraded, has_dynamic_sql "
+            "FROM current_sp_reliability WHERE procedure_id = ?",
+            (proc_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if json_output:
+        branch_list = [
+            {
+                "index": b[0],
+                "type": b[1],
+                "condition": b[2],
+                "tables": b[3],
+                "depth": b[4],
+            }
+            for b in branches
+        ]
+        output = {
+            "procedure": procedure_name,
+            "branch_count": len(branches),
+            "branches": branch_list,
+            "reliability": {
+                "parse_quality": reliability[0] if reliability else None,
+                "is_degraded": bool(reliability[1]) if reliability else None,
+                "has_dynamic_sql": bool(reliability[2]) if reliability else None,
+            },
+        }
+        typer.echo(json_mod.dumps(output, indent=2))
+        return
+
+    typer.echo(f"Branch Analysis: {procedure_name}")
+    typer.echo(f"Total branches: {len(branches)}")
+
+    if reliability:
+        typer.echo(f"Parse quality: {reliability[0]:.2%}")
+        if reliability[1]:
+            typer.echo("  WARNING: Parse quality degraded")
+        if reliability[2]:
+            typer.echo("  Contains dynamic SQL")
+
+    if branches:
+        typer.echo("\nBranches:")
+        for b in branches:
+            cond = f": {b[2]}" if b[2] else ""
+            typer.echo(f"  [{b[1]}] depth={b[4]}{cond}")
+    else:
+        typer.echo("No branches found.")
+
+
+@app.command()
+def impact(
+    entity_name: str = typer.Argument(help="Entity to analyze"),
+    entity_type: str = typer.Option("table", "--type", "-t", help="Entity type: table or procedure"),
+    max_depth: int = typer.Option(3, "--depth", "-d", help="Maximum BFS depth"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Show entities affected by an entity via BFS traversal of the relationship graph."""
+    import json as json_mod
+
+    from db_wiki.core.queries import find_entity_by_name, lookup_entity_name
+    from db_wiki.graph.bfs import bfs_graph
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        entity_id, found_type = find_entity_by_name(conn, entity_name)
+        if entity_id is None:
+            typer.echo(f"Entity not found: {entity_name}", err=True)
+            raise typer.Exit(code=1)
+
+        bfs_results = bfs_graph(conn, entity_id, max_depth=max_depth)
+
+        # Resolve names for all nodes
+        rows = []
+        for r in bfs_results[1:]:  # skip the start node itself
+            node_name = lookup_entity_name(conn, r["node_id"])
+            rows.append({
+                "name": node_name,
+                "node_id": r["node_id"],
+                "depth": r["depth"],
+                "relationship": r["edge_type"] or "",
+            })
+    finally:
+        conn.close()
+
+    if not rows:
+        typer.echo(f"No affected entities found for {entity_name}")
+        return
+
+    if json_output:
+        typer.echo(json_mod.dumps({"entity": entity_name, "affected": rows}, indent=2))
+        return
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        tbl = Table("Name", "Depth", "Relationship", show_header=True)
+        for r in rows:
+            tbl.add_row(r["name"], str(r["depth"]), r["relationship"])
+        console.print(f"[bold]Impact of {entity_name}[/bold] (depth {max_depth}):")
+        console.print(tbl)
+    except ImportError:
+        typer.echo(f"Impact of {entity_name} (depth {max_depth}):")
+        for r in rows:
+            typer.echo(f"  depth={r['depth']}  {r['relationship']}  {r['name']}")
+
+
+@app.command()
+def coverage(
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Show knowledge coverage statistics for the knowledge store."""
+    import json as json_mod
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        total_tables = conn.execute("SELECT COUNT(*) FROM current_db_tables").fetchone()[0]
+        tables_with_desc = conn.execute(
+            "SELECT COUNT(*) FROM current_db_tables WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+        tables_with_rels = conn.execute(
+            "SELECT COUNT(DISTINCT source_id) FROM current_db_relationships "
+            "WHERE source_id IN (SELECT id FROM current_db_tables)"
+        ).fetchone()[0]
+        tables_with_wiki = conn.execute(
+            "SELECT COUNT(DISTINCT entity_id) FROM current_wiki_pages WHERE entity_type='table'"
+        ).fetchone()[0]
+        total_procs = conn.execute("SELECT COUNT(*) FROM current_db_procedures").fetchone()[0]
+        procs_with_desc = conn.execute(
+            "SELECT COUNT(*) FROM current_db_procedures WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+        total_cols = conn.execute("SELECT COUNT(*) FROM current_db_columns").fetchone()[0]
+        cols_with_desc = conn.execute(
+            "SELECT COUNT(*) FROM current_db_columns WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    def pct(n: int, total: int) -> str:
+        return f"{n}/{total} ({100*n//total if total else 0}%)"
+
+    stats = {
+        "tables": {
+            "total": total_tables,
+            "with_description": tables_with_desc,
+            "with_relationships": tables_with_rels,
+            "with_wiki": tables_with_wiki,
+        },
+        "procedures": {
+            "total": total_procs,
+            "with_description": procs_with_desc,
+        },
+        "columns": {
+            "total": total_cols,
+            "with_description": cols_with_desc,
+        },
+    }
+
+    if json_output:
+        typer.echo(json_mod.dumps(stats, indent=2))
+        return
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        tbl = Table("Category", "Metric", "Coverage", show_header=True)
+        tbl.add_row("Tables", "Total", str(total_tables))
+        tbl.add_row("Tables", "With description", pct(tables_with_desc, total_tables))
+        tbl.add_row("Tables", "With relationships", pct(tables_with_rels, total_tables))
+        tbl.add_row("Tables", "With wiki pages", pct(tables_with_wiki, total_tables))
+        tbl.add_row("Procedures", "Total", str(total_procs))
+        tbl.add_row("Procedures", "With description", pct(procs_with_desc, total_procs))
+        tbl.add_row("Columns", "Total", str(total_cols))
+        tbl.add_row("Columns", "With description", pct(cols_with_desc, total_cols))
+        console.print("[bold]Knowledge Coverage[/bold]")
+        console.print(tbl)
+    except ImportError:
+        typer.echo("Knowledge Coverage:")
+        typer.echo(f"  Tables: {total_tables} total, {tables_with_desc} with description")
+        typer.echo(f"  Procedures: {total_procs} total, {procs_with_desc} with description")
+        typer.echo(f"  Columns: {total_cols} total, {cols_with_desc} with description")
+
+
+@app.command("data-quality")
+def data_quality_cmd(
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Show knowledge gaps, low-confidence facts, and data quality issues."""
+    import json as json_mod
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        # knowledge_gaps.severity is REAL (0.0-1.0): >0.7 = high, 0.4-0.7 = medium, <0.4 = low
+        high_gaps = conn.execute(
+            "SELECT COUNT(*) FROM current_knowledge_gaps WHERE severity >= 0.7"
+        ).fetchone()[0]
+        medium_gaps = conn.execute(
+            "SELECT COUNT(*) FROM current_knowledge_gaps WHERE severity >= 0.4 AND severity < 0.7"
+        ).fetchone()[0]
+        low_gaps = conn.execute(
+            "SELECT COUNT(*) FROM current_knowledge_gaps WHERE severity < 0.4"
+        ).fetchone()[0]
+        gaps_by_severity = {"high": high_gaps, "medium": medium_gaps, "low": low_gaps}
+
+        gaps_sample = conn.execute(
+            "SELECT gap_type, entity_type, severity, description "
+            "FROM current_knowledge_gaps "
+            "ORDER BY severity DESC "
+            "LIMIT 20"
+        ).fetchall()
+
+        # Count low-confidence columns (no dedicated facts table — use columns with no description)
+        # as a proxy for low-confidence coverage
+        low_confidence_count = conn.execute(
+            "SELECT COUNT(*) FROM current_db_columns "
+            "WHERE description IS NULL OR description = ''"
+        ).fetchone()[0]
+    finally:
+        conn.close()
+
+    if json_output:
+        output = {
+            "gaps_by_severity": gaps_by_severity,
+            "low_confidence_columns": low_confidence_count,
+            "gaps_sample": [
+                {"type": r[0], "entity_type": r[1], "severity": r[2], "description": r[3]}
+                for r in gaps_sample
+            ],
+        }
+        typer.echo(json_mod.dumps(output, indent=2))
+        return
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        console.print("[bold]Data Quality Report[/bold]")
+
+        sev_tbl = Table("Severity", "Gap Count", show_header=True)
+        for sev, cnt in gaps_by_severity.items():
+            sev_tbl.add_row(sev, str(cnt))
+        sev_tbl.add_row("columns without description", str(low_confidence_count))
+        console.print(sev_tbl)
+
+        if gaps_sample:
+            gap_tbl = Table("Type", "Entity", "Severity", "Description", show_header=True)
+            for r in gaps_sample:
+                gap_tbl.add_row(r[0] or "", r[1] or "", f"{r[2]:.2f}" if r[2] is not None else "", (r[3] or "")[:60])
+            console.print(gap_tbl)
+    except ImportError:
+        typer.echo("Data Quality Report:")
+        for sev, cnt in gaps_by_severity.items():
+            typer.echo(f"  {sev}: {cnt} gaps")
+        typer.echo(f"  columns without description: {low_confidence_count}")
+
+
+@app.command()
+def forensics(
+    entity_name: str = typer.Argument(help="Entity to trace"),
+    direction: str = typer.Option("both", "--direction", help="upstream, downstream, or both"),
+    max_depth: int = typer.Option(5, "--depth", "-d", help="Maximum BFS depth"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Trace data lineage (upstream/downstream) for an entity."""
+    import json as json_mod
+
+    from db_wiki.core.queries import find_entity_by_name, lookup_entity_name
+    from db_wiki.graph.bfs import bfs_graph
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        entity_id, _found_type = find_entity_by_name(conn, entity_name)
+        if entity_id is None:
+            typer.echo(f"Entity not found: {entity_name}", err=True)
+            raise typer.Exit(code=1)
+
+        data_edge_types = ["reads_from", "writes_to", "feeds_into"]
+        bfs_results = bfs_graph(
+            conn,
+            entity_id,
+            max_depth=max_depth,
+            edge_types=data_edge_types,
+            bidirectional=(direction == "both"),
+        )
+
+        # Filter by direction
+        rows = []
+        for r in bfs_results[1:]:
+            if direction == "upstream" and r["edge_type"] not in ("reads_from",):
+                continue
+            if direction == "downstream" and r["edge_type"] not in ("writes_to", "feeds_into"):
+                continue
+            node_name = lookup_entity_name(conn, r["node_id"])
+            rows.append({
+                "name": node_name,
+                "depth": r["depth"],
+                "edge_type": r["edge_type"] or "",
+            })
+    finally:
+        conn.close()
+
+    if json_output:
+        typer.echo(json_mod.dumps({
+            "entity": entity_name,
+            "direction": direction,
+            "flow": rows,
+        }, indent=2))
+        return
+
+    typer.echo(f"Forensic trace for {entity_name} (direction={direction}, depth={max_depth}):")
+    if not rows:
+        typer.echo("  No data flow found.")
+        return
+    for r in rows:
+        indent = "  " * r["depth"]
+        typer.echo(f"{indent}--[{r['edge_type']}]--> {r['name']}")
+
+
+@app.command()
+def compare(
+    entity_a: str = typer.Argument(help="First entity"),
+    entity_b: str = typer.Argument(help="Second entity"),
+    json_output: bool = typer.Option(False, "--json", "-j", help="JSON output"),
+    store_path: Path = typer.Option(Path(".db-wiki"), "--store-path"),
+) -> None:
+    """Compare two entities (tables or procedures) side by side."""
+    import json as json_mod
+
+    from db_wiki.core.queries import find_entity_by_name
+
+    store_path = store_path.resolve()
+    conn, _config = _open_store_with_query_schema(store_path)
+    try:
+        id_a, type_a = find_entity_by_name(conn, entity_a)
+        if id_a is None:
+            typer.echo(f"Entity not found: {entity_a}", err=True)
+            raise typer.Exit(code=1)
+
+        id_b, type_b = find_entity_by_name(conn, entity_b)
+        if id_b is None:
+            typer.echo(f"Entity not found: {entity_b}", err=True)
+            raise typer.Exit(code=1)
+
+        def _get_cols(eid: int, etype: str | None) -> set[str]:
+            if etype == "table":
+                rows = conn.execute(
+                    "SELECT column_name FROM current_db_columns WHERE table_id = ?", (eid,)
+                ).fetchall()
+                return {r[0] for r in rows}
+            return set()
+
+        def _get_rel_count(eid: int) -> int:
+            return conn.execute(
+                "SELECT COUNT(*) FROM current_db_relationships WHERE source_id = ?", (eid,)
+            ).fetchone()[0]
+
+        cols_a = _get_cols(id_a, type_a)
+        cols_b = _get_cols(id_b, type_b)
+        shared_cols = cols_a & cols_b
+        rels_a = _get_rel_count(id_a)
+        rels_b = _get_rel_count(id_b)
+    finally:
+        conn.close()
+
+    comparison = {
+        "entity_a": {"name": entity_a, "type": type_a, "column_count": len(cols_a), "relationship_count": rels_a},
+        "entity_b": {"name": entity_b, "type": type_b, "column_count": len(cols_b), "relationship_count": rels_b},
+        "shared_columns": sorted(shared_cols),
+        "shared_column_count": len(shared_cols),
+    }
+
+    if json_output:
+        typer.echo(json_mod.dumps(comparison, indent=2))
+        return
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        tbl = Table("Metric", entity_a, entity_b, show_header=True)
+        tbl.add_row("Type", type_a or "unknown", type_b or "unknown")
+        tbl.add_row("Column count", str(len(cols_a)), str(len(cols_b)))
+        tbl.add_row("Relationship count", str(rels_a), str(rels_b))
+        tbl.add_row("Shared columns", str(len(shared_cols)), "")
+        console.print(f"[bold]Comparison: {entity_a} vs {entity_b}[/bold]")
+        console.print(tbl)
+        if shared_cols:
+            console.print(f"Shared columns: {', '.join(sorted(shared_cols))}")
+    except ImportError:
+        typer.echo(f"Comparison: {entity_a} vs {entity_b}")
+        typer.echo(f"  {entity_a}: {len(cols_a)} columns, {rels_a} relationships")
+        typer.echo(f"  {entity_b}: {len(cols_b)} columns, {rels_b} relationships")
+        if shared_cols:
+            typer.echo(f"  Shared: {', '.join(sorted(shared_cols))}")
 
 
 def main() -> None:
