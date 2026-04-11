@@ -91,6 +91,8 @@ def assemble_context(
         if not block:
             continue
         block_tokens = estimate_tokens(block)
+        if used_tokens + block_tokens > schema_budget:
+            break  # stop adding L2 blocks when budget exhausted
         l2_blocks.append(block)
         used_tokens += block_tokens
 
