@@ -76,8 +76,9 @@ def cache_query(
         tier: Query tier string (e.g. "lookup", "aggregation").
         schema_version: Current schema version (from get_schema_version()).
     """
-    now_iso = datetime.now(timezone.utc).isoformat()
-    now_ts = int(datetime.now(timezone.utc).timestamp())
+    now = datetime.now(timezone.utc)
+    now_iso = now.isoformat()
+    now_ts = int(now.timestamp())
     conn.execute(
         """INSERT OR REPLACE INTO query_cache
            (question_hash, question, sql, tier, schema_version, created_at, created_at_ts)
