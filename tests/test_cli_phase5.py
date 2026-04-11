@@ -1,12 +1,9 @@
-"""Phase 5 Wave 0 test stubs for CLI Phase 5 commands (CLI-05, EXPORT-01).
+"""Phase 5 CLI commands tests (CLI-05, EXPORT-01).
 
-All tests are marked xfail — they verify the contracts that the Phase 5
-CLI implementation must satisfy.
+Tests verify the contracts for Phase 5 CLI implementations:
+serve, status, export, daemon subcommands.
 """
 import pytest
-
-
-XFAIL_REASON = "Phase 5 Wave 0 stub — not yet implemented"
 
 
 # ---------------------------------------------------------------------------
@@ -14,12 +11,19 @@ XFAIL_REASON = "Phase 5 Wave 0 stub — not yet implemented"
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_status_command(tmp_path):
     """'db-wiki status' output contains 'Coverage'. (EXPORT-01, CLI-05)"""
     from typer.testing import CliRunner
 
     from db_wiki.cli.app import app
+    from db_wiki.core.config import write_default_config
+    from db_wiki.core.store import init_schema, open_store
+
+    # Initialize a real store so the command succeeds
+    write_default_config(tmp_path)
+    conn = open_store(tmp_path / "knowledge.db")
+    init_schema(conn)
+    conn.close()
 
     runner = CliRunner()
     result = runner.invoke(app, ["status", "--store-path", str(tmp_path)])
@@ -31,7 +35,6 @@ def test_status_command(tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_serve_command_exists():
     """'serve' command is registered in the Typer app. (CLI-05)"""
     from typer.testing import CliRunner
@@ -49,12 +52,19 @@ def test_serve_command_exists():
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_export_command(tmp_path):
     """'db-wiki export' runs without unhandled exceptions. (CLI-05)"""
     from typer.testing import CliRunner
 
     from db_wiki.cli.app import app
+    from db_wiki.core.config import write_default_config
+    from db_wiki.core.store import init_schema, open_store
+
+    # Initialize a real store so the command can open the DB
+    write_default_config(tmp_path)
+    conn = open_store(tmp_path / "knowledge.db")
+    init_schema(conn)
+    conn.close()
 
     runner = CliRunner()
     result = runner.invoke(
@@ -64,3 +74,44 @@ def test_export_command(tmp_path):
     # Exit 0 or a handled user-facing error (non-zero with message) is acceptable;
     # an unhandled exception (traceback in output) is not.
     assert "Traceback" not in result.output
+
+
+# ---------------------------------------------------------------------------
+# CLI-05: daemon subcommand group is registered and prints redirect message
+# ---------------------------------------------------------------------------
+
+
+def test_daemon_start_prints_redirect():
+    """'db-wiki daemon start' prints redirect message to db-wiki serve. (CLI-05)"""
+    from typer.testing import CliRunner
+
+    from db_wiki.cli.app import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["daemon", "start"])
+    assert "serve" in result.output
+    assert result.exit_code == 0
+
+
+def test_daemon_stop_prints_redirect():
+    """'db-wiki daemon stop' prints redirect message. (CLI-05)"""
+    from typer.testing import CliRunner
+
+    from db_wiki.cli.app import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["daemon", "stop"])
+    assert "serve" in result.output
+    assert result.exit_code == 0
+
+
+def test_daemon_status_prints_redirect():
+    """'db-wiki daemon status' prints redirect message. (CLI-05)"""
+    from typer.testing import CliRunner
+
+    from db_wiki.cli.app import app
+
+    runner = CliRunner()
+    result = runner.invoke(app, ["daemon", "status"])
+    assert "serve" in result.output
+    assert result.exit_code == 0

@@ -1228,6 +1228,269 @@ def compare(
             typer.echo(f"  Shared: {', '.join(sorted(shared_cols))}")
 
 
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", help="Host to bind"),
+    port: int = typer.Option(8080, help="Port to listen on"),
+    no_ui: bool = typer.Option(False, "--no-ui", help="Headless learning loop only (no web UI)"),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Start web UI and background learning daemon in one process (D-04, CLI-05).
+
+    Starts both the web graph UI (default http://127.0.0.1:8080) and a background
+    learning scheduler. Use --no-ui for headless daemon-only mode.
+    Stop with Ctrl+C.
+    """
+    import time
+
+    from db_wiki.core.config import load_config
+    from db_wiki.daemon.scheduler import DaemonScheduler
+
+    # T-03-01: resolve to absolute path before any file operations
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    config = load_config(store_path)
+
+    # Start background scheduler
+    scheduler = DaemonScheduler(db_path, config)
+    scheduler.start()
+    typer.echo(
+        f"Background learning daemon started "
+        f"(fast={config.daemon.fast_interval_minutes}m)"
+    )
+
+    if not no_ui:
+        import uvicorn
+
+        from db_wiki.web.app import create_web_app
+
+        web_app = create_web_app(db_path, config)
+        typer.echo(f"Web UI: http://{host}:{port}")
+        typer.echo("Press Ctrl+C to stop.")
+        try:
+            uvicorn.run(web_app, host=host, port=port, log_level="info")
+        finally:
+            scheduler.stop()
+            typer.echo("Daemon stopped.")
+    else:
+        typer.echo("Headless mode — press Ctrl+C to stop.")
+        try:
+            while True:
+                time.sleep(60)
+        except KeyboardInterrupt:
+            scheduler.stop()
+            typer.echo("Daemon stopped.")
+
+
+@app.command(name="status")
+def status(
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Show maturity dashboard: coverage, gaps, conflicts, and growth trend (EXPORT-01, D-10)."""
+    # T-03-01: resolve to absolute path
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    try:
+        tables = conn.execute("SELECT COUNT(*) FROM current_db_tables").fetchone()[0]
+        columns = conn.execute("SELECT COUNT(*) FROM current_db_columns").fetchone()[0]
+        procedures = conn.execute("SELECT COUNT(*) FROM current_db_procedures").fetchone()[0]
+        rels = conn.execute("SELECT COUNT(*) FROM current_db_relationships").fetchone()[0]
+
+        # Coverage: tables with descriptions
+        tables_with_desc = conn.execute(
+            "SELECT COUNT(*) FROM current_db_tables "
+            "WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+        coverage_pct = (tables_with_desc / tables * 100) if tables > 0 else 0.0
+
+        # Gap and conflict counts
+        try:
+            gap_count = conn.execute(
+                "SELECT COUNT(*) FROM current_knowledge_gaps"
+            ).fetchone()[0]
+        except Exception:
+            gap_count = 0
+
+        try:
+            conflict_count = conn.execute(
+                "SELECT COUNT(*) FROM current_knowledge_gaps WHERE gap_type = 'conflict'"
+            ).fetchone()[0]
+        except Exception:
+            conflict_count = 0
+
+        # Knowledge growth
+        try:
+            recent_facts = conn.execute(
+                "SELECT COUNT(*) FROM facts WHERE created_at >= datetime('now', '-7 days')"
+            ).fetchone()[0]
+            prev_facts = conn.execute(
+                "SELECT COUNT(*) FROM facts "
+                "WHERE created_at >= datetime('now', '-14 days') "
+                "AND created_at < datetime('now', '-7 days')"
+            ).fetchone()[0]
+        except Exception:
+            recent_facts = 0
+            prev_facts = 0
+
+    finally:
+        conn.close()
+
+    try:
+        from rich.console import Console
+        from rich.table import Table
+
+        console = Console()
+        tbl = Table(title="DB Wiki — Knowledge Store Status", show_header=True)
+        tbl.add_column("Metric", style="bold")
+        tbl.add_column("Value")
+
+        tbl.add_row("Tables", str(tables))
+        tbl.add_row("Columns", str(columns))
+        tbl.add_row("Procedures", str(procedures))
+        tbl.add_row("Relationships", str(rels))
+        tbl.add_row("Schema Coverage", f"{coverage_pct:.1f}%")
+        tbl.add_row("Open Gaps", str(gap_count))
+        tbl.add_row("Conflicts", str(conflict_count))
+
+        if recent_facts > 0 or prev_facts > 0:
+            trend = "up" if recent_facts >= prev_facts else "down"
+            tbl.add_row(
+                "Knowledge Growth",
+                f"{recent_facts} facts (last 7d) vs {prev_facts} (prev 7d) [{trend}]",
+            )
+
+        console.print(tbl)
+    except ImportError:
+        typer.echo("DB Wiki — Knowledge Store Status")
+        typer.echo(f"  Tables: {tables} | Columns: {columns} | Procedures: {procedures}")
+        typer.echo(f"  Relationships: {rels}")
+        typer.echo(f"  Schema Coverage: {coverage_pct:.1f}%")
+        typer.echo(f"  Open Gaps: {gap_count} | Conflicts: {conflict_count}")
+
+
+@app.command(name="export")
+def export_cmd(
+    entity_name: Optional[str] = typer.Argument(
+        None, help="Entity name to export (omit for all)"
+    ),
+    format: str = typer.Option(
+        "all", "--format", "-f", help="Format: markdown, mermaid, json, ddl, all"
+    ),
+    to_cross: bool = typer.Option(
+        False, "--to-cross", help="Push patterns to cross-project store (D-07 explicit opt-in)"
+    ),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Export knowledge in multiple formats to .db-wiki/export/ (D-11, EXPORT-03).
+
+    Supports markdown wiki pages, Mermaid ER diagrams, JSON schema, and annotated DDL.
+    Use --to-cross to push patterns to the shared cross-project store (explicit opt-in per D-07).
+    """
+    from db_wiki.export.runner import ALL_FORMATS, run_export
+
+    # T-03-01: resolve to absolute path
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    try:
+        if to_cross:
+            from db_wiki.cross.export import push_patterns_to_cross
+
+            db_name = store_path.parent.name or "default"
+            counts = push_patterns_to_cross(conn, db_name)
+            typer.echo(f"Pushed patterns to cross-project store: {counts}")
+        else:
+            fmt_list = ALL_FORMATS if format == "all" else [
+                f.strip() for f in format.split(",")
+            ]
+            output_dir = store_path / "export"
+            entity_type = "table"
+            results = run_export(conn, output_dir, fmt_list, entity_name, entity_type)
+            typer.echo(f"Exported {len(results)} files to {output_dir}")
+            for path in results:
+                typer.echo(f"  {path}")
+    finally:
+        conn.close()
+
+
+# ---------------------------------------------------------------------------
+# Phase 5 daemon command group (CLI-05 — discoverability stubs per D-04)
+#
+# IMPORTANT: These are intentional discoverability stubs, NOT incomplete
+# implementations. D-04 specifies `db-wiki serve` as the combined web+learning
+# command. There is no separate detached daemon process. These stubs exist so
+# users who type `db-wiki daemon` are directed to `db-wiki serve`.
+# ---------------------------------------------------------------------------
+
+daemon_app = typer.Typer(
+    help="Background learning daemon management. Use 'db-wiki serve' for the combined web+learning process."
+)
+app.add_typer(daemon_app, name="daemon")
+
+
+@daemon_app.command()
+def start(
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Start background learning. Redirects to 'db-wiki serve --no-ui'."""
+    typer.echo("The learning daemon runs as part of 'db-wiki serve'.")
+    typer.echo("For headless learning (no web UI): db-wiki serve --no-ui")
+    typer.echo("For web UI + learning:             db-wiki serve")
+    raise typer.Exit(0)
+
+
+@daemon_app.command()
+def stop() -> None:
+    """Stop background learning. Redirects to Ctrl+C on serve process."""
+    typer.echo("The daemon runs inside 'db-wiki serve'. Stop it with Ctrl+C.")
+    raise typer.Exit(0)
+
+
+@daemon_app.command(name="status")
+def daemon_status() -> None:
+    """Show daemon status. Redirects to serve process."""
+    typer.echo("The daemon runs inside 'db-wiki serve'. Check that process for status.")
+    typer.echo("For knowledge store status: db-wiki status")
+    raise typer.Exit(0)
+
+
 def main() -> None:
     """Entry point for the db-wiki CLI."""
     app()
