@@ -110,7 +110,10 @@ def connect(
     config.database.connection_string = connection_string
 
     with open(config_path, "w", encoding="utf-8") as f:
-        yaml.dump(config.model_dump(), f, default_flow_style=False)
+        yaml.dump(
+            config.model_dump(exclude={"learning": {"llm_api_key"}}),
+            f, default_flow_style=False,
+        )
 
     display = connection_string[:50] + ("..." if len(connection_string) > 50 else "")
     typer.echo(f"Connection registered: {display}")
