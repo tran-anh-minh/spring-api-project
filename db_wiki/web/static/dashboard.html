@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DB Wiki — Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --dominant:       #1a1a2e;
+      --secondary:      #16213e;
+      --accent:         #0f3460;
+      --text-primary:   #e0e0e0;
+      --text-secondary: #9ca3af;
+      --font: system-ui, -apple-system, sans-serif;
+      --toolbar-height: 48px;
+    }
+    html, body { height: 100%; font-family: var(--font); font-size: 14px; background: var(--dominant); color: var(--text-primary); }
+    /* Toolbar */
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--toolbar-height);
+      background: var(--secondary); display: flex; align-items: center;
+      padding: 0 16px; gap: 8px; z-index: 100; border-bottom: 1px solid var(--accent);
+    }
+    #toolbar h1 { font-size: 20px; font-weight: 600; margin-right: 8px; line-height: 1.2; }
+    .toolbar-btn {
+      height: 32px; padding: 0 8px; background: var(--accent);
+      border: 1px solid #4a6fa5; border-radius: 4px;
+      color: var(--text-primary); font-size: 12px; font-weight: 600;
+      font-family: var(--font); cursor: pointer; white-space: nowrap; margin-left: auto;
+    }
+    .toolbar-btn:hover { background: #1a4a80; }
+    #graph-link {
+      color: var(--text-secondary); font-size: 12px; font-weight: 600;
+      text-decoration: none; padding: 0 8px; height: 32px; display: flex;
+      align-items: center; border-radius: 4px; border: 1px solid transparent;
+    }
+    #graph-link:hover { color: var(--text-primary); border-color: var(--accent); }
+    /* Content */
+    #content { margin-top: var(--toolbar-height); padding: 24px; display: flex; flex-direction: column; gap: 24px; }
+    /* Stat row */
+    #stat-row { display: flex; gap: 16px; }
+    .stat-card {
+      flex: 1; background: var(--secondary); border-radius: 6px;
+      padding: 16px; border: 1px solid var(--accent); display: flex; flex-direction: column; gap: 8px;
+    }
+    .stat-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+    .stat-value { font-size: 20px; font-weight: 600; color: var(--text-primary); }
+    /* Charts row */
+    #charts-row { display: flex; gap: 16px; }
+    .chart-card {
+      flex: 1; background: var(--secondary); border-radius: 6px;
+      padding: 16px; border: 1px solid var(--accent);
+    }
+    .chart-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+    .chart-wrap { position: relative; height: 220px; }
+    /* Top Gaps table */
+    #gaps-section { background: var(--secondary); border-radius: 6px; padding: 16px; border: 1px solid var(--accent); }
+    .section-title { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 12px; }
+    #gaps-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+    #gaps-table th { font-size: 12px; font-weight: 600; color: var(--text-secondary); text-align: left; padding: 8px; border-bottom: 1px solid var(--accent); }
+    #gaps-table td { padding: 8px; border-bottom: 1px solid rgba(15,52,96,0.3); color: var(--text-primary); }
+    #gaps-table tr:last-child td { border-bottom: none; }
+    /* Empty state */
+    .empty-state { text-align: center; padding: 48px 24px; }
+    .empty-state h2 { font-size: 16px; font-weight: 600; color: var(--text-primary); margin-bottom: 8px; }
+    .empty-state p { font-size: 14px; color: var(--text-secondary); }
+  </style>
+</head>
+<body>
+<header id="toolbar">
+  <h1>DB Wiki</h1>
+  <a href="/" id="graph-link">Graph</a>
+  <button class="toolbar-btn" id="export-btn">Export All</button>
+</header>
+
+<div id="content">
+  <!-- Stat cards -->
+  <div id="stat-row">
+    <div class="stat-card">
+      <div class="stat-label">Schema Coverage</div>
+      <div class="stat-value" id="stat-coverage">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Open Gaps</div>
+      <div class="stat-value" id="stat-gaps">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="stat-label">Conflicts</div>
+      <div class="stat-value" id="stat-conflicts">--</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div id="charts-row">
+    <div class="chart-card">
+      <div class="chart-title">Coverage Over Time</div>
+      <div class="chart-wrap"><canvas id="coverage-chart"></canvas></div>
+    </div>
+    <div class="chart-card">
+      <div class="chart-title">Gap Burndown</div>
+      <div class="chart-wrap"><canvas id="burndown-chart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Top gaps table -->
+  <div id="gaps-section">
+    <div class="section-title">Top Gaps</div>
+    <table id="gaps-table">
+      <thead>
+        <tr>
+          <th>gap_type</th><th>description</th><th>severity</th><th>attempts</th><th>last_attempted</th>
+        </tr>
+      </thead>
+      <tbody id="gaps-tbody"></tbody>
+    </table>
+    <div id="gaps-empty" class="empty-state" style="display:none">
+      <h2>No knowledge data available</h2>
+      <p>Ingest a schema and run a learning loop to see coverage metrics.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+const ACCENT = '#0f3460';
+const TEXT = '#e0e0e0';
+const LABEL = '#9ca3af';
+
+const chartDefaults = {
+  responsive: true,
+  maintainAspectRatio: false,
+  plugins: { legend: { labels: { color: TEXT, font: { size: 12 } } } },
+  scales: {
+    x: { ticks: { color: LABEL, font: { size: 11 } }, grid: { color: 'rgba(15,52,96,0.3)' } },
+    y: { ticks: { color: LABEL, font: { size: 11 } }, grid: { color: 'rgba(15,52,96,0.3)' } }
+  }
+};
+
+function makeCoverageChart(history) {
+  const labels = history.map(h => h.date || '');
+  const values = history.map(h => h.coverage_pct || 0);
+  new Chart(document.getElementById('coverage-chart'), {
+    type: 'line',
+    data: {
+      labels: labels.length ? labels : ['Now'],
+      datasets: [{
+        label: 'Coverage %', data: values.length ? values : [0],
+        borderColor: ACCENT, backgroundColor: 'rgba(15,52,96,0.2)', tension: 0.3, fill: true
+      }]
+    },
+    options: chartDefaults
+  });
+}
+
+function makeBurndownChart(topGaps) {
+  const labels = topGaps.slice(0, 8).map(g => g.gap_type || 'unknown');
+  const values = topGaps.slice(0, 8).map(g => g.attempts || 0);
+  new Chart(document.getElementById('burndown-chart'), {
+    type: 'bar',
+    data: {
+      labels: labels.length ? labels : ['No data'],
+      datasets: [{
+        label: 'Attempts', data: values.length ? values : [0],
+        backgroundColor: ACCENT, borderColor: '#4a6fa5', borderWidth: 1
+      }]
+    },
+    options: chartDefaults
+  });
+}
+
+async function loadDashboard() {
+  try {
+    const r = await fetch('/api/dashboard');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const data = await r.json();
+
+    document.getElementById('stat-coverage').textContent =
+      data.coverage_pct != null ? data.coverage_pct.toFixed(1) + '%' : '0%';
+    document.getElementById('stat-gaps').textContent = data.gap_count ?? 0;
+    document.getElementById('stat-conflicts').textContent = data.conflict_count ?? 0;
+
+    makeCoverageChart(data.history || []);
+    makeBurndownChart(data.top_gaps || []);
+
+    const tbody = document.getElementById('gaps-tbody');
+    const gaps = data.top_gaps || [];
+    if (gaps.length === 0) {
+      document.getElementById('gaps-table').style.display = 'none';
+      document.getElementById('gaps-empty').style.display = 'block';
+    } else {
+      for (const g of gaps) {
+        const tr = document.createElement('tr');
+        tr.innerHTML =
+          `<td>${g.gap_type || ''}</td>` +
+          `<td>${g.description || ''}</td>` +
+          `<td>${g.severity != null ? Number(g.severity).toFixed(2) : ''}</td>` +
+          `<td>${g.attempts || 0}</td>` +
+          `<td>${g.last_attempted || ''}</td>`;
+        tbody.appendChild(tr);
+      }
+    }
+  } catch (err) {
+    document.getElementById('stat-coverage').textContent = '--';
+    document.getElementById('stat-gaps').textContent = '--';
+    document.getElementById('stat-conflicts').textContent = '--';
+    document.getElementById('gaps-table').style.display = 'none';
+    document.getElementById('gaps-empty').style.display = 'block';
+    makeCoverageChart([]);
+    makeBurndownChart([]);
+    console.error('dashboard load error:', err);
+  }
+}
+
+document.getElementById('export-btn').addEventListener('click', async function() {
+  this.textContent = 'Exporting...'; this.disabled = true;
+  try {
+    const r = await fetch('/api/export', { method: 'POST' });
+    const d = await r.json();
+    this.textContent = d.export_path ? 'Exported' : 'Not Available';
+  } catch { this.textContent = 'Export Failed'; }
+  finally { setTimeout(() => { this.textContent = 'Export All'; this.disabled = false; }, 3000); }
+});
+
+loadDashboard();
+</script>
+</body>
+</html>

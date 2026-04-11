@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DB Wiki</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/vis-network@10.0.2/dist/dist/vis-network.min.css" crossorigin="anonymous" />
+  <script src="https://cdn.jsdelivr.net/npm/vis-network@10.0.2/standalone/umd/vis-network.min.js" crossorigin="anonymous"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    :root {
+      --dominant:       #1a1a2e;
+      --secondary:      #16213e;
+      --accent:         #0f3460;
+      --text-primary:   #e0e0e0;
+      --text-secondary: #9ca3af;
+      --font: system-ui, -apple-system, sans-serif;
+      --toolbar-height: 48px;
+      --panel-width:    360px;
+    }
+    html, body {
+      height: 100%; font-family: var(--font); font-size: 14px;
+      background: var(--dominant); color: var(--text-primary); overflow: hidden;
+    }
+    /* Toolbar */
+    #toolbar {
+      position: fixed; top: 0; left: 0; right: 0; height: var(--toolbar-height);
+      background: var(--secondary); display: flex; align-items: center;
+      padding: 0 16px; gap: 8px; z-index: 100; border-bottom: 1px solid var(--accent);
+    }
+    #toolbar h1 { font-size: 20px; font-weight: 600; line-height: 1.2; white-space: nowrap; margin-right: 8px; }
+    #search-input {
+      flex: 1; max-width: 320px; height: 32px; padding: 0 8px;
+      background: var(--dominant); border: 1px solid var(--accent); border-radius: 4px;
+      color: var(--text-primary); font-size: 14px; font-family: var(--font); outline: none;
+    }
+    #search-input:focus { border-color: #0f3460; box-shadow: 0 0 0 2px rgba(15,52,96,0.4); }
+    #search-input::placeholder { color: var(--text-secondary); }
+    .toolbar-btn {
+      height: 32px; padding: 0 8px; background: var(--dominant);
+      border: 1px solid var(--accent); border-radius: 4px;
+      color: var(--text-primary); font-size: 12px; font-weight: 600;
+      font-family: var(--font); cursor: pointer; white-space: nowrap;
+    }
+    .toolbar-btn:hover, .toolbar-btn.active { background: var(--accent); }
+    #export-btn { background: var(--accent); border-color: #4a6fa5; margin-left: auto; }
+    #dashboard-link {
+      color: var(--text-secondary); font-size: 12px; font-weight: 600;
+      text-decoration: none; padding: 0 8px; height: 32px; display: flex;
+      align-items: center; border-radius: 4px; border: 1px solid transparent;
+    }
+    #dashboard-link:hover { color: var(--text-primary); border-color: var(--accent); }
+    /* Layout */
+    #main { position: fixed; top: var(--toolbar-height); left: 0; right: 0; bottom: 0; display: flex; }
+    #graph-container { flex: 1; background: var(--dominant); position: relative; }
+    #graph-canvas { width: 100%; height: 100%; }
+    /* Overlay */
+    #graph-overlay {
+      position: absolute; inset: 0; display: none; flex-direction: column;
+      align-items: center; justify-content: center; gap: 16px; text-align: center;
+      padding: 24px; pointer-events: none;
+    }
+    #graph-overlay.visible { display: flex; }
+    #graph-overlay h2 { font-size: 16px; font-weight: 600; color: var(--text-primary); }
+    #graph-overlay p { font-size: 14px; color: var(--text-secondary); max-width: 360px; }
+    #graph-overlay code { background: var(--accent); padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+    /* Side panel */
+    #side-panel {
+      width: 0; background: var(--secondary); overflow: hidden;
+      transition: width 0.25s ease; border-left: 1px solid var(--accent); display: flex;
+    }
+    #side-panel.open { width: var(--panel-width); }
+    #panel-inner { width: var(--panel-width); height: 100%; overflow-y: auto; padding: 24px; display: flex; flex-direction: column; gap: 16px; }
+    #panel-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+    #panel-entity-name { font-size: 16px; font-weight: 600; line-height: 1.3; color: var(--text-primary); }
+    #panel-close-btn {
+      background: transparent; border: 1px solid var(--accent); border-radius: 4px;
+      color: var(--text-secondary); font-size: 12px; font-weight: 600;
+      padding: 4px 8px; cursor: pointer; font-family: var(--font);
+    }
+    #panel-type-badge { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 3px; display: inline-block; background: var(--accent); color: var(--text-primary); }
+    #panel-confidence { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+    #panel-l1, #panel-l2 {
+      font-size: 14px; color: var(--text-primary); white-space: pre-wrap;
+      word-break: break-word; line-height: 1.5;
+      background: var(--dominant); border-radius: 4px; padding: 8px; border: 1px solid var(--accent);
+    }
+    .gap-badge {
+      font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 3px;
+      background: rgba(239,68,68,0.15); border: 1px solid #ef4444; color: #fca5a5; display: inline-block;
+    }
+    #panel-gaps { display: flex; flex-direction: column; gap: 4px; }
+    #search-empty {
+      display: none; position: fixed; top: calc(var(--toolbar-height) + 4px);
+      left: 50%; transform: translateX(-50%);
+      background: var(--secondary); border: 1px solid var(--accent);
+      border-radius: 4px; padding: 4px 16px; font-size: 12px;
+      color: var(--text-secondary); z-index: 200; pointer-events: none;
+    }
+    @keyframes pulse { 0%, 100% { border-color: #ef4444; } 50% { border-color: transparent; } }
+  </style>
+</head>
+<body>
+<header id="toolbar">
+  <h1>DB Wiki</h1>
+  <input type="search" id="search-input" placeholder="Search tables, columns, procedures..."
+         autocomplete="off" aria-label="Search knowledge graph" />
+  <button class="toolbar-btn active" id="view-toggle-btn">Type View</button>
+  <a href="/dashboard" id="dashboard-link">Dashboard</a>
+  <button class="toolbar-btn" id="export-btn">Export All</button>
+</header>
+
+<div id="main">
+  <div id="graph-container">
+    <div id="graph-canvas"></div>
+    <div id="graph-overlay">
+      <h2 id="overlay-title">No schema ingested yet</h2>
+      <p id="overlay-body">Run <code>db-wiki ingest schema.sql</code> to add tables, then refresh this page.</p>
+    </div>
+  </div>
+  <aside id="side-panel" aria-label="Entity detail panel">
+    <div id="panel-inner">
+      <div id="panel-header">
+        <div id="panel-entity-name">Loading...</div>
+        <button id="panel-close-btn" aria-label="Close detail panel">Close</button>
+      </div>
+      <div id="panel-type-badge"></div>
+      <div id="panel-confidence"></div>
+      <div id="panel-l1"></div>
+      <div id="panel-l2"></div>
+      <div id="panel-gaps"></div>
+    </div>
+  </aside>
+</div>
+<div id="search-empty">No entities match your search. Try a table name or column keyword.</div>
+
+<script>
+const NODE_COLORS = {
+  table: '#3b82f6', stored_procedure: '#8b5cf6', column: '#10b981',
+  index: '#f59e0b', constraint: '#6b7280', enum_value: '#ec4899'
+};
+const NODE_SHAPES = { table: 'dot', stored_procedure: 'square', column: 'diamond', index: 'triangle' };
+const CONF_COLORS = [
+  {min:0.8, color:'#22c55e', opacity:1.0}, {min:0.6, color:'#84cc16', opacity:0.9},
+  {min:0.4, color:'#eab308', opacity:0.75}, {min:0.2, color:'#f97316', opacity:0.6},
+  {min:0.0, color:'#ef4444', opacity:0.45}
+];
+
+let currentView = 'type', network = null, nodesDS = null, edgesDS = null, allNodesData = [];
+
+function confColor(c) {
+  for (const e of CONF_COLORS) { if (c >= e.min) return { color: e.color, opacity: e.opacity }; }
+  return { color: '#ef4444', opacity: 0.45 };
+}
+
+function buildVisNode(raw, view) {
+  const n = { id: raw.id, label: raw.label, title: raw.title || raw.label, shape: NODE_SHAPES[raw.group] || 'dot' };
+  if (view === 'confidence') {
+    const { color, opacity } = confColor(raw.confidence || 1.0);
+    n.color = { background: color, border: color, highlight: { background: color, border: '#fff' } };
+    n.opacity = opacity;
+  } else {
+    const c = NODE_COLORS[raw.group] || '#3b82f6';
+    n.color = { background: c, border: c, highlight: { background: c, border: '#fff' } };
+    n.opacity = raw.opacity || 1.0;
+  }
+  if (raw.is_gap) {
+    n.shapeProperties = { borderDashes: [6, 3] };
+    n.borderWidth = 2;
+    n.color = Object.assign({}, n.color, { border: '#ef4444' });
+  }
+  return n;
+}
+
+function showOverlay(title, body) {
+  document.getElementById('overlay-title').textContent = title;
+  document.getElementById('overlay-body').innerHTML = body.replace(/`([^`]+)`/g, '<code>$1</code>');
+  document.getElementById('graph-overlay').classList.add('visible');
+}
+function hideOverlay() { document.getElementById('graph-overlay').classList.remove('visible'); }
+
+async function initGraph() {
+  let data;
+  try {
+    const r = await fetch('/api/graph');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    data = await r.json();
+  } catch (err) {
+    showOverlay('Could not load graph data.', 'Check that `db-wiki serve` is running, then refresh.');
+    return;
+  }
+  if (!data.nodes || data.nodes.length === 0) {
+    showOverlay('No schema ingested yet', 'Run `db-wiki ingest schema.sql` to add tables, then refresh this page.');
+    return;
+  }
+  hideOverlay();
+  allNodesData = data.nodes;
+  nodesDS = new vis.DataSet(data.nodes.map(n => buildVisNode(n, currentView)));
+  edgesDS = new vis.DataSet(data.edges.map(e => ({
+    id: e.from + '-' + e.to, from: e.from, to: e.to, label: e.label || '',
+    arrows: 'to', opacity: Math.max(0.15, e.confidence || 1.0), smooth: { type: 'dynamic' }
+  })));
+
+  const opts = {
+    physics: {
+      solver: 'forceAtlas2Based',
+      forceAtlas2Based: { gravitationalConstant: -40, springLength: 100, springConstant: 0.05 },
+      stabilization: { enabled: true, iterations: 200 }
+    },
+    nodes: { size: 18, font: { size: 12, color: '#e0e0e0', face: 'system-ui,-apple-system,sans-serif' }, borderWidth: 1.5 },
+    edges: { arrows: { to: { enabled: true, scaleFactor: 0.7 } }, smooth: { type: 'dynamic' }, font: { size: 11, color: '#9ca3af' } },
+    interaction: { hover: true }
+  };
+  network = new vis.Network(document.getElementById('graph-canvas'), { nodes: nodesDS, edges: edgesDS }, opts);
+  network.on('stabilizationIterationsDone', () => network.setOptions({ physics: { enabled: false } }));
+  network.on('click', p => { if (p.nodes.length > 0) openPanel(p.nodes[0]); });
+  network.on('doubleClick', p => { if (p.nodes.length > 0) expandNode(p.nodes[0]); });
+}
+
+async function expandNode(nodeId) {
+  const rawId = String(nodeId).replace(/^t_/, '');
+  try {
+    const r = await fetch(`/api/graph?node=${rawId}&depth=1`);
+    if (!r.ok) return;
+    const data = await r.json();
+    nodesDS.update(data.nodes.map(n => buildVisNode(n, currentView)));
+    edgesDS.update(data.edges.map(e => ({ id: e.from + '-' + e.to, from: e.from, to: e.to, label: e.label || '', arrows: 'to' })));
+    for (const n of data.nodes) { if (!allNodesData.find(x => x.id === n.id)) allNodesData.push(n); }
+  } catch (e) { console.error('expandNode:', e); }
+}
+
+async function openPanel(nodeId) {
+  const rawId = String(nodeId).replace(/^t_/, '');
+  document.getElementById('side-panel').classList.add('open');
+  document.getElementById('panel-entity-name').textContent = 'Loading...';
+  ['panel-type-badge', 'panel-confidence', 'panel-l1', 'panel-l2', 'panel-gaps'].forEach(id => {
+    document.getElementById(id).textContent = '';
+  });
+  try {
+    const r = await fetch(`/api/wiki?entity_id=${rawId}`);
+    if (!r.ok) throw new Error();
+    const d = await r.json();
+    document.getElementById('panel-entity-name').textContent = d.name || `Entity #${rawId}`;
+    document.getElementById('panel-type-badge').textContent = d.type || '';
+    document.getElementById('panel-confidence').textContent = d.confidence != null
+      ? `Confidence: ${(d.confidence * 100).toFixed(0)}%` : '';
+    document.getElementById('panel-l1').textContent = d.l1_content || '';
+    document.getElementById('panel-l2').textContent = d.l2_content || '';
+    const gEl = document.getElementById('panel-gaps');
+    if (d.gaps && d.gaps.length > 0) {
+      for (const g of d.gaps) {
+        const b = document.createElement('span'); b.className = 'gap-badge';
+        b.textContent = `${g.gap_type}: ${g.description || ''}`;
+        gEl.appendChild(b);
+      }
+    }
+  } catch {
+    document.getElementById('panel-entity-name').textContent =
+      'Detail unavailable for this entity. It may not have been fully processed yet.';
+  }
+}
+
+function toggleView() {
+  currentView = currentView === 'type' ? 'confidence' : 'type';
+  document.getElementById('view-toggle-btn').textContent = currentView === 'type' ? 'Type View' : 'Confidence View';
+  if (nodesDS) nodesDS.update(allNodesData.map(n => buildVisNode(n, currentView)));
+}
+
+let searchTimer = null;
+function debounceSearch(q) {
+  clearTimeout(searchTimer);
+  document.getElementById('search-empty').style.display = 'none';
+  if (!q) { if (network) { network.unselectAll(); network.fit({ animation: true }); } return; }
+  searchTimer = setTimeout(() => runSearch(q), 300);
+}
+
+async function runSearch(q) {
+  try {
+    const r = await fetch(`/api/search?q=${encodeURIComponent(q)}`);
+    if (!r.ok) return;
+    const data = await r.json();
+    if (!network || !data.results) return;
+    if (data.results.length === 0) {
+      const el = document.getElementById('search-empty');
+      el.style.display = 'block';
+      setTimeout(() => el.style.display = 'none', 3000);
+      return;
+    }
+    const ids = data.results.map(r => `t_${r.entity_id}`).filter(id => nodesDS && nodesDS.get(id));
+    if (ids.length > 0) {
+      network.selectNodes(ids);
+      network.fit({ nodes: ids, animation: { duration: 600, easingFunction: 'easeInOutQuad' } });
+    }
+  } catch (e) { console.error('search:', e); }
+}
+
+async function triggerExport() {
+  const btn = document.getElementById('export-btn');
+  btn.textContent = 'Exporting...'; btn.disabled = true;
+  try {
+    const r = await fetch('/api/export', { method: 'POST' });
+    const d = await r.json();
+    btn.textContent = d.export_path ? 'Exported' : 'Not Available';
+  } catch { btn.textContent = 'Export Failed'; }
+  finally { setTimeout(() => { btn.textContent = 'Export All'; btn.disabled = false; }, 3000); }
+}
+
+document.getElementById('view-toggle-btn').addEventListener('click', toggleView);
+document.getElementById('panel-close-btn').addEventListener('click', () =>
+  document.getElementById('side-panel').classList.remove('open'));
+document.getElementById('export-btn').addEventListener('click', triggerExport);
+document.getElementById('search-input').addEventListener('input', function() { debounceSearch(this.value.trim()); });
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.getElementById('search-input').value = '';
+    debounceSearch('');
+    document.getElementById('side-panel').classList.remove('open');
+  }
+});
+
+initGraph();
+</script>
+</body>
+</html>
