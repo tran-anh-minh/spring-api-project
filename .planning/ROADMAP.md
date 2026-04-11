@@ -88,8 +88,15 @@ Plans:
   3. Generated SQL is validated against the knowledge store — references to non-existent tables/columns are caught and rewritten
   4. Context assembly stays under 8K tokens for schemas with 100+ tables using L0/L1/L2 tiered loading
   5. User can execute the generated SQL against a live database and receive results inline
-**Plans**: TBD
+**Plans:** 5 plans
 **UI hint**: no
+
+Plans:
+- [ ] 04-01-PLAN.md — Schema extension, concept resolver, wiki page generator
+- [ ] 04-02-PLAN.md — Query tier classifier, L0/L1/L2 context assembler, SQL generator, validator
+- [ ] 04-03-PLAN.md — Query pipeline orchestrator, cache, live executor, Analyst Agent
+- [ ] 04-04-PLAN.md — MCP tools (ask, explain, define_metric, analysis tools)
+- [ ] 04-05-PLAN.md — CLI commands mirroring all MCP tools
 
 ### Phase 5: Web UI + Cross-Project + Polish
 **Goal**: Users can visually explore the knowledge graph, share patterns across databases, and schedule background learning
@@ -114,5 +121,5 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 1. Foundation | 0/3 | Planning complete | - |
 | 2. SP Parsing + Knowledge Graph | 0/5 | Planning complete | - |
 | 3. Learning Loop | 0/6 | Planning complete | - |
-| 4. Query Engine | 0/TBD | Not started | - |
+| 4. Query Engine | 0/5 | Planning complete | - |
 | 5. Web UI + Cross-Project + Polish | 0/TBD | Not started | - |
