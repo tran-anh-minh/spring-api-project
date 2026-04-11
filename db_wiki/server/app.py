@@ -132,25 +132,104 @@ async def ingest(file_path: str, ctx: Context) -> str:
 
 @mcp.tool()
 async def status(ctx: Context) -> str:
-    """Show knowledge store status.
+    """Show knowledge store status including coverage, gaps, and growth trend (MCP-06).
 
-    Returns counts of tables, columns, and relationships currently in the store.
+    Returns counts of tables, columns, procedures, relationships, gap_count,
+    conflict_count, coverage_pct, top gaps, and knowledge growth trend.
     """
     app_ctx: AppContext = ctx.request_context.lifespan_context
-    try:
-        tables = app_ctx.conn.execute("SELECT COUNT(*) FROM current_db_tables").fetchone()[0]
-        columns = app_ctx.conn.execute("SELECT COUNT(*) FROM current_db_columns").fetchone()[0]
-        procedures = app_ctx.conn.execute(
-            "SELECT COUNT(*) FROM current_db_procedures"
+
+    def _query():
+        conn = app_ctx.conn
+        tables = conn.execute("SELECT COUNT(*) FROM current_db_tables").fetchone()[0]
+        columns = conn.execute("SELECT COUNT(*) FROM current_db_columns").fetchone()[0]
+        procedures = conn.execute("SELECT COUNT(*) FROM current_db_procedures").fetchone()[0]
+        rels = conn.execute("SELECT COUNT(*) FROM current_db_relationships").fetchone()[0]
+
+        # Coverage: tables with at least one description (proxy for confidence >= 0.5)
+        tables_with_desc = conn.execute(
+            "SELECT COUNT(*) FROM current_db_tables "
+            "WHERE description IS NOT NULL AND description != ''"
         ).fetchone()[0]
-        rels = app_ctx.conn.execute(
-            "SELECT COUNT(*) FROM current_db_relationships"
-        ).fetchone()[0]
+        coverage_pct = (tables_with_desc / tables * 100) if tables > 0 else 0.0
+
+        # Gap and conflict counts
+        try:
+            gap_count = conn.execute(
+                "SELECT COUNT(*) FROM current_knowledge_gaps"
+            ).fetchone()[0]
+        except Exception:
+            gap_count = 0
+
+        try:
+            conflict_count = conn.execute(
+                "SELECT COUNT(*) FROM current_knowledge_gaps "
+                "WHERE gap_type = 'conflict'"
+            ).fetchone()[0]
+        except Exception:
+            conflict_count = 0
+
+        # Top 5 unresolved gaps by severity
+        try:
+            top_gaps = conn.execute(
+                "SELECT gap_type, entity_type, severity, description "
+                "FROM current_knowledge_gaps "
+                "ORDER BY severity DESC LIMIT 5"
+            ).fetchall()
+        except Exception:
+            top_gaps = []
+
+        # Knowledge growth: facts added in last 7 days vs previous 7 days
+        try:
+            recent_facts = conn.execute(
+                "SELECT COUNT(*) FROM facts "
+                "WHERE created_at >= datetime('now', '-7 days')"
+            ).fetchone()[0]
+            prev_facts = conn.execute(
+                "SELECT COUNT(*) FROM facts "
+                "WHERE created_at >= datetime('now', '-14 days') "
+                "AND created_at < datetime('now', '-7 days')"
+            ).fetchone()[0]
+        except Exception:
+            recent_facts = 0
+            prev_facts = 0
+
         return (
-            f"Knowledge store: {tables} tables, {columns} columns, "
-            f"{procedures} procedures, {rels} relationships"
+            tables, columns, procedures, rels, coverage_pct,
+            gap_count, conflict_count, top_gaps, recent_facts, prev_facts
         )
-    except Exception as e:
+
+    try:
+        (
+            tables, columns, procedures, rels, coverage_pct,
+            gap_count, conflict_count, top_gaps, recent_facts, prev_facts
+        ) = await anyio.to_thread.run_sync(_query)
+
+        lines = [
+            f"Knowledge Store Status",
+            f"  Tables: {tables} | Columns: {columns} | Procedures: {procedures} | Relationships: {rels}",
+            f"  Schema Coverage: {coverage_pct:.1f}%",
+            f"  Open Gaps: {gap_count} | Conflicts: {conflict_count}",
+        ]
+
+        # Knowledge growth trend
+        if recent_facts > 0 or prev_facts > 0:
+            trend = "up" if recent_facts >= prev_facts else "down"
+            lines.append(
+                f"  Knowledge Growth: {recent_facts} facts (last 7d) vs {prev_facts} facts (prev 7d) [{trend}]"
+            )
+
+        # Top gaps
+        if top_gaps:
+            lines.append("  Top Gaps:")
+            for g in top_gaps:
+                gap_type, entity_type, severity, description = g
+                sev_str = f"{severity:.2f}" if severity is not None else "?"
+                desc_str = (description or "")[:60]
+                lines.append(f"    [{gap_type}/{entity_type}] sev={sev_str} {desc_str}")
+
+        return "\n".join(lines)
+    except Exception:
         logger.exception("Status query failed")
         raise
 
@@ -386,6 +465,176 @@ async def discover(ctx: Context, max_gaps: int = 10) -> str:
         config.learning.max_gaps_per_run = max_gaps
 
     from db_wiki.learning.orchestrator import run_learning_loop
+
+    summary = await anyio.to_thread.run_sync(
+        lambda: run_learning_loop(app_ctx.conn, config)
+    )
+    return summary
+
+
+@mcp.tool()
+async def lint(ctx: Context) -> str:
+    """Check knowledge store health and report issues (MCP-06).
+
+    Checks for:
+    - Orphan tables (no relationships)
+    - Tables with no columns
+    - Low-confidence stored procedures (parse quality < 0.3)
+    - Stale unresolved gaps (> 30 days old)
+    """
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+    conn = app_ctx.conn
+
+    def _run_lint():
+        issues = []
+
+        # Check for orphan tables (no relationships)
+        try:
+            orphans = conn.execute(
+                "SELECT t.table_name FROM current_db_tables t "
+                "LEFT JOIN current_db_relationships r "
+                "ON t.id = r.source_id OR t.id = r.target_id "
+                "WHERE r.source_id IS NULL AND r.target_id IS NULL"
+            ).fetchall()
+            for o in orphans:
+                issues.append(f"WARN: Orphan table '{o[0]}' — no relationships")
+        except Exception:
+            pass
+
+        # Check for tables with no columns
+        try:
+            empty = conn.execute(
+                "SELECT t.table_name FROM current_db_tables t "
+                "LEFT JOIN current_db_columns c ON t.id = c.table_id "
+                "WHERE c.id IS NULL"
+            ).fetchall()
+            for e in empty:
+                issues.append(f"ERROR: Table '{e[0]}' has no columns")
+        except Exception:
+            pass
+
+        # Check for SPs with low parse quality (< 0.3)
+        try:
+            low_quality = conn.execute(
+                "SELECT p.procedure_name, r.parse_quality "
+                "FROM current_sp_reliability r "
+                "JOIN current_db_procedures p ON p.id = r.procedure_id "
+                "WHERE r.parse_quality < 0.3"
+            ).fetchall()
+            for row in low_quality:
+                issues.append(
+                    f"WARN: Procedure '{row[0]}' has low parse quality ({row[1]:.0%})"
+                )
+        except Exception:
+            pass
+
+        # Check for stale gaps (> 30 days without resolution)
+        try:
+            stale = conn.execute(
+                "SELECT COUNT(*) FROM current_knowledge_gaps "
+                "WHERE created_at < datetime('now', '-30 days')"
+            ).fetchone()[0]
+            if stale > 0:
+                issues.append(
+                    f"WARN: {stale} gap(s) unresolved for more than 30 days"
+                )
+        except Exception:
+            pass
+
+        return issues
+
+    issues = await anyio.to_thread.run_sync(_run_lint)
+    if not issues:
+        return "Knowledge store health: OK — no issues found."
+    return "Knowledge store issues:\n" + "\n".join(issues)
+
+
+@mcp.tool()
+async def history(ctx: Context, limit: int = 20) -> str:
+    """Show recent learning loop activity (MCP-06).
+
+    Args:
+        limit: Maximum number of history entries to return (default 20, max 100).
+    """
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+
+    # T-05-13: cap limit to prevent DoS
+    limit = min(limit, 100)
+
+    def _query():
+        conn = app_ctx.conn
+        try:
+            rows = conn.execute(
+                "SELECT task_type, gap_type, result_type, created_at "
+                "FROM agent_results "
+                "ORDER BY created_at DESC "
+                "LIMIT ?",
+                (limit,),
+            ).fetchall()
+        except Exception:
+            rows = []
+        return rows
+
+    rows = await anyio.to_thread.run_sync(_query)
+    if not rows:
+        return "No recent learning loop activity found."
+
+    lines = [f"Recent Learning Loop Activity (last {len(rows)} entries):"]
+    lines.append(f"{'Task Type':<20} {'Gap Type':<20} {'Result':<20} {'Date'}")
+    lines.append("-" * 80)
+    for task_type, gap_type, result_type, created_at in rows:
+        lines.append(
+            f"{(task_type or '-'):<20} {(gap_type or '-'):<20} "
+            f"{(result_type or '-'):<20} {created_at or '-'}"
+        )
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def export_knowledge(
+    ctx: Context,
+    formats: str = "all",
+    entity_name: str | None = None,
+    entity_type: str = "table",
+) -> str:
+    """Export knowledge in multiple formats (MCP-06, EXPORT-03).
+
+    Args:
+        formats: Comma-separated formats or "all". Options: markdown, mermaid, json, ddl.
+        entity_name: If specified, export only this entity. Default: all entities.
+        entity_type: "table" or "procedure" (used with entity_name).
+    """
+    from db_wiki.export.runner import ALL_FORMATS, run_export
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+    fmt_list = ALL_FORMATS if formats == "all" else [f.strip() for f in formats.split(",")]
+    output_dir = Path(app_ctx.store_path) / "export"
+
+    results = await anyio.to_thread.run_sync(
+        lambda: run_export(app_ctx.conn, output_dir, fmt_list, entity_name, entity_type)
+    )
+    return (
+        f"Exported {len(results)} files to {output_dir}:\n"
+        + "\n".join(results.keys())
+    )
+
+
+@mcp.tool()
+async def loop(ctx: Context, max_gaps: int = 10) -> str:
+    """Trigger a learning loop run (MCP-06).
+
+    Args:
+        max_gaps: Maximum gaps to investigate in this run (default 10).
+
+    Returns:
+        Summary of gaps found, investigated, and facts updated.
+    """
+    from db_wiki.learning.orchestrator import run_learning_loop
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+    config = load_config(app_ctx.store_path)
+    if max_gaps != config.learning.max_gaps_per_run:
+        config.learning.max_gaps_per_run = max_gaps
 
     summary = await anyio.to_thread.run_sync(
         lambda: run_learning_loop(app_ctx.conn, config)
