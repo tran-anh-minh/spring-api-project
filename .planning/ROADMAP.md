@@ -108,13 +108,21 @@ Plans:
   3. User can run `db-wiki daemon start` to enable background learning at fast/medium/deep/human frequencies
   4. User can view a maturity dashboard showing coverage %, gap count, conflict count, and knowledge growth trend
   5. Learnings from database A (naming patterns, common enums) are available with a confidence penalty when ingesting database B
-**Plans**: TBD
+**Plans:** 6 plans
 **UI hint**: yes
+
+Plans:
+- [ ] 05-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
+- [ ] 05-01-PLAN.md — Starlette web app with vis.js graph page and Chart.js dashboard
+- [ ] 05-02-PLAN.md — Background learning daemon scheduler (schedule library)
+- [ ] 05-03-PLAN.md — Cross-project pattern store, export, and reader
+- [ ] 05-04-PLAN.md — Multi-format export system (markdown, Mermaid, JSON, annotated DDL)
+- [ ] 05-05-PLAN.md — MCP manage tools and CLI commands (serve, status, export, daemon)
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
+Phases execute in numeric order: 1 -> 2 -> 3 -> 4 -> 5
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -122,4 +130,4 @@ Phases execute in numeric order: 1 → 2 → 3 → 4 → 5
 | 2. SP Parsing + Knowledge Graph | 0/5 | Planning complete | - |
 | 3. Learning Loop | 0/6 | Planning complete | - |
 | 4. Query Engine | 0/5 | Planning complete | - |
-| 5. Web UI + Cross-Project + Polish | 0/TBD | Not started | - |
+| 5. Web UI + Cross-Project + Polish | 0/6 | Planning complete | - |
