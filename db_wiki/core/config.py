@@ -70,6 +70,15 @@ class LearningConfig(BaseModel):
     gap_weights: LearningGapWeightsConfig = LearningGapWeightsConfig()
 
 
+class QueryConfig(BaseModel):
+    """Query engine configuration (Plan 04-03)."""
+
+    token_budget: int = 8000
+    max_retries: int = 3
+    cache_enabled: bool = True
+    max_execution_rows: int = 100
+
+
 class DBWikiConfig(BaseModel):
     """Top-level configuration for db-wiki."""
 
@@ -78,6 +87,7 @@ class DBWikiConfig(BaseModel):
     ingest: IngestConfig = IngestConfig()
     embedding: EmbeddingConfig = EmbeddingConfig()
     learning: LearningConfig = LearningConfig()
+    query: QueryConfig = QueryConfig()
 
 
 def load_config(store_path: Path) -> DBWikiConfig:
