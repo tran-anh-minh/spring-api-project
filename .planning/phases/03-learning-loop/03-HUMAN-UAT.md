@@ -8,7 +8,11 @@ updated: "2026-04-11T01:30:00+07:00"
 
 ## Current Test
 
-[awaiting human testing]
+number: 1
+name: End-to-end learning loop
+expected: |
+  Trigger `discover` on a real seeded store — loop should detect gaps, investigate via agents, and apply findings
+awaiting: user response
 
 ## Tests
 

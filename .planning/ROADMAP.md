@@ -112,10 +112,10 @@ Plans:
 **UI hint**: yes
 
 Plans:
-- [ ] 05-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
-- [ ] 05-01-PLAN.md — Starlette web app with vis.js graph page and Chart.js dashboard
+- [x] 05-00-PLAN.md — Wave 0 test stubs for Nyquist compliance
+- [x] 05-01-PLAN.md — Starlette web app with vis.js graph page and Chart.js dashboard
 - [ ] 05-02-PLAN.md — Background learning daemon scheduler (schedule library)
-- [ ] 05-03-PLAN.md — Cross-project pattern store, export, and reader
+- [x] 05-03-PLAN.md — Cross-project pattern store, export, and reader
 - [ ] 05-04-PLAN.md — Multi-format export system (markdown, Mermaid, JSON, annotated DDL)
 - [ ] 05-05-PLAN.md — MCP manage tools and CLI commands (serve, status, export, daemon)
 
