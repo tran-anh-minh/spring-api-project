@@ -3,16 +3,23 @@
 Provides MCP tools for ingesting DDL files and querying the knowledge store.
 Connects to the knowledge store via lifespan context (MCP-01, MCP-02).
 
+Phase 4 tools (MCP-04, MCP-05): ask, explain, define_metric, state_machine,
+branch_analysis, impact, coverage, data_quality, forensics, compare.
+
 Security notes:
 - T-03-02: file_path validated to exist and be a regular file before reading
 - T-03-03: file size checked against config.ingest.max_file_size_mb limit
+- T-04-10: ask tool validates SQL via sqlglot; execution gated by explicit execute param
+- T-04-11: define_metric validates SQL fragment via sqlglot + keyword blacklist
+- T-04-13: impact/forensics limit BFS depth to prevent DoS
 """
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+import anyio
 from mcp.server.fastmcp import Context, FastMCP
 
 from db_wiki.core.config import load_config
@@ -27,6 +34,7 @@ class AppContext:
 
     store_path: Path
     conn: sqlite3.Connection
+    pipeline: object | None = None  # QueryPipeline, lazy to avoid circular import
 
 
 @asynccontextmanager
@@ -41,8 +49,16 @@ async def app_lifespan(server: FastMCP):
     db_path = store_path / "knowledge.db"
     conn = open_store(db_path)
     init_schema(conn)
+
+    # Phase 4: init query schema and pipeline
+    from db_wiki.core.query_schema import init_query_schema
+    from db_wiki.query.pipeline import QueryPipeline
+
+    init_query_schema(conn)
+    pipeline = QueryPipeline(conn, config)
+
     try:
-        yield AppContext(store_path=store_path, conn=conn)
+        yield AppContext(store_path=store_path, conn=conn, pipeline=pipeline)
     finally:
         conn.close()
 
@@ -187,6 +203,19 @@ async def search(
         name = lookup_entity_name(app_ctx.conn, entity_id)
         lines.append(f"  [{entity_type}] {name} (score: {score:.3f})")
 
+    # D-10: Enrich with query engine suggestions when pipeline is available
+    if app_ctx.pipeline is not None:
+        try:
+            from db_wiki.query.resolver import resolve_concepts
+
+            resolved = resolve_concepts(app_ctx.conn, query, config.embedding, limit=1)
+            if resolved:
+                top = resolved[0]
+                lines.append("")
+                lines.append(f"Related queries: You can ask: 'show me {top.name} data'")
+        except Exception:
+            pass  # non-critical enhancement
+
     return "\n".join(lines)
 
 
@@ -235,7 +264,20 @@ async def lineage(
         node_name = lookup_entity_name(app_ctx.conn, r["node_id"])
         indent = "  " * r["depth"]
         edge_label = f" --[{r['edge_type']}]--> " if r["edge_type"] else ""
-        lines.append(f"{indent}{edge_label}{node_name} (depth {r['depth']})")
+
+        # D-10: Append L0 wiki summary when pipeline is available
+        wiki_note = ""
+        if app_ctx.pipeline is not None:
+            try:
+                from db_wiki.query.wiki import get_wiki_page
+
+                l0 = get_wiki_page(app_ctx.conn, "table", r["node_id"], "L0")
+                if l0:
+                    wiki_note = f" — {l0}"
+            except Exception:
+                pass  # non-critical enhancement
+
+        lines.append(f"{indent}{edge_label}{node_name} (depth {r['depth']}){wiki_note}")
 
     return "\n".join(lines)
 
@@ -406,6 +448,540 @@ async def teach(
     result = await anyio.to_thread.run_sync(
         lambda: teach_fact(app_ctx.conn, entity_type, entity_name, attribute, value)
     )
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: Query Engine MCP tools (MCP-04, MCP-05)
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def ask(question: str, ctx: Context, execute: bool = False) -> str:
+    """Ask a natural language question and receive T-SQL.
+
+    Set execute=True to run against live DB.
+
+    Args:
+        question: Natural language question about the database.
+        execute: Whether to execute the generated SQL against live DB.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+    if app.pipeline is None:
+        return "Query pipeline not available."
+
+    result = await anyio.to_thread.run_sync(
+        lambda: app.pipeline.run(question, execute=execute)
+    )
+
+    if result.sql is None:
+        return (
+            "Could not generate SQL for this question. "
+            "Try rephrasing or ensure LLM is configured for complex queries."
+        )
+
+    lines = [
+        f"## Query: {question}",
+        "",
+        f"**Tier:** {result.tier}",
+        f"**Attempts:** {result.attempts}",
+        f"**From cache:** {result.from_cache}",
+        "",
+        "```sql",
+        result.sql,
+        "```",
+    ]
+
+    if result.validation_errors:
+        lines.append("")
+        lines.append(f"**Warnings:** {', '.join(result.validation_errors)}")
+
+    if result.execution_result:
+        lines.append("")
+        lines.append("## Results")
+        lines.append("")
+        exec_r = result.execution_result
+        if exec_r.get("error"):
+            lines.append(f"**Error:** {exec_r['error']}")
+        elif exec_r.get("rows"):
+            cols = exec_r.get("columns", [])
+            rows = exec_r["rows"]
+            if cols:
+                lines.append("| " + " | ".join(str(c) for c in cols) + " |")
+                lines.append("| " + " | ".join("---" for _ in cols) + " |")
+            for row in rows:
+                lines.append("| " + " | ".join(str(v) for v in row) + " |")
+            lines.append(f"\n*{len(rows)} row(s)*")
+        else:
+            lines.append("No rows returned.")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def explain(entity_name: str, ctx: Context, entity_type: str = "table") -> str:
+    """Get detailed wiki explanation of a table or stored procedure.
+
+    Args:
+        entity_name: Name of the entity to explain.
+        entity_type: "table" or "procedure" (default "table").
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.query.wiki import generate_wiki_markdown
+
+    def _lookup_and_generate():
+        if entity_type == "table":
+            row = app.conn.execute(
+                "SELECT id FROM current_db_tables WHERE table_name = ?",
+                (entity_name,),
+            ).fetchone()
+        else:
+            row = app.conn.execute(
+                "SELECT id FROM current_db_procedures WHERE procedure_name = ?",
+                (entity_name,),
+            ).fetchone()
+        if not row:
+            return None
+        return generate_wiki_markdown(app.conn, entity_type, row[0])
+
+    result = await anyio.to_thread.run_sync(_lookup_and_generate)
+    if result is None:
+        return f"Entity '{entity_name}' not found."
+    return result
+
+
+@mcp.tool()
+async def define_metric(
+    name: str,
+    sql_expression: str,
+    source_tables: str,
+    ctx: Context,
+    description: str = "",
+) -> str:
+    """Define a business metric as a reusable SQL expression.
+
+    Args:
+        name: Metric name (e.g. "monthly_revenue").
+        sql_expression: SQL fragment (e.g. "SUM(amount)").
+        source_tables: Comma-separated table names.
+        description: Optional description.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.query.resolver import define_metric as _define_metric
+
+    tables = [t.strip() for t in source_tables.split(",") if t.strip()]
+
+    def _do():
+        return _define_metric(app.conn, name, sql_expression, tables, description or None)
+
+    try:
+        metric_id = await anyio.to_thread.run_sync(_do)
+        return f"Metric '{name}' defined successfully (id={metric_id})."
+    except (ValueError, Exception) as e:
+        return f"Error defining metric: {e}"
+
+
+@mcp.tool()
+async def state_machine(table_name: str, column_name: str, ctx: Context) -> str:
+    """Generate a Mermaid state diagram for a column's state transitions.
+
+    Args:
+        table_name: Table containing the state column.
+        column_name: Column that holds state values.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    def _generate():
+        transitions = app.conn.execute(
+            "SELECT from_state, to_state, via_procedure "
+            "FROM current_state_transitions "
+            "WHERE table_name = ? AND column_name = ?",
+            (table_name, column_name),
+        ).fetchall()
+        if not transitions:
+            return None
+
+        # Get enum labels for richer display
+        enums = app.conn.execute(
+            "SELECT enum_value, enum_label FROM current_enum_values "
+            "WHERE table_name = ? AND column_name = ?",
+            (table_name, column_name),
+        ).fetchall()
+        label_map = {str(row[0]): row[1] for row in enums if row[1]}
+
+        lines = ["stateDiagram-v2"]
+        desc_lines = []
+        for from_s, to_s, via in transitions:
+            from_label = label_map.get(str(from_s), str(from_s))
+            to_label = label_map.get(str(to_s), str(to_s))
+            via_label = f": {via}" if via else ""
+            lines.append(f"    {from_label} --> {to_label}{via_label}")
+            desc_lines.append(
+                f"- {from_label} -> {to_label}"
+                + (f" (via {via})" if via else "")
+            )
+
+        mermaid = "```mermaid\n" + "\n".join(lines) + "\n```"
+        desc = "\n".join(desc_lines)
+        return f"{mermaid}\n\n**Transitions:**\n{desc}"
+
+    result = await anyio.to_thread.run_sync(_generate)
+    if result is None:
+        return f"No state transitions found for {table_name}.{column_name}."
+    return result
+
+
+@mcp.tool()
+async def branch_analysis(procedure_name: str, ctx: Context) -> str:
+    """Analyze IF/ELSE branches in a stored procedure showing tables touched per branch.
+
+    Args:
+        procedure_name: Name of the stored procedure to analyze.
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    def _analyze():
+        row = app.conn.execute(
+            "SELECT id FROM current_db_procedures WHERE procedure_name = ?",
+            (procedure_name,),
+        ).fetchone()
+        if not row:
+            return None
+        proc_id = row[0]
+
+        branches = app.conn.execute(
+            "SELECT branch_type, condition_text, tables_touched_json, nesting_depth "
+            "FROM current_sp_branches WHERE procedure_id = ? ORDER BY branch_index",
+            (proc_id,),
+        ).fetchall()
+
+        if not branches:
+            return f"## Branch Analysis: {procedure_name}\n\nNo branches found."
+
+        lines = [f"## Branch Analysis: {procedure_name}", ""]
+        for i, (btype, cond, tables_json, depth) in enumerate(branches, 1):
+            lines.append(f"### Branch {i}: {cond or '(unconditional)'}")
+            lines.append(f"- Type: {btype}")
+            lines.append(f"- Nesting depth: {depth}")
+            lines.append(f"- Tables: {tables_json or '[]'}")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    result = await anyio.to_thread.run_sync(_analyze)
+    if result is None:
+        return f"Procedure not found: {procedure_name}"
+    return result
+
+
+@mcp.tool()
+async def impact(
+    entity_name: str, ctx: Context, entity_type: str = "table", max_depth: int = 3
+) -> str:
+    """Analyze impact: show all entities affected by changes to the given entity.
+
+    Args:
+        entity_name: Name of the entity to analyze.
+        entity_type: "table" or "procedure" (default "table").
+        max_depth: BFS traversal depth (default 3, max 10).
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.core.queries import find_entity_by_name, lookup_entity_name
+    from db_wiki.graph.bfs import bfs_graph
+
+    # T-04-13: cap depth
+    max_depth = min(max_depth, 10)
+
+    entity_id, etype = find_entity_by_name(app.conn, entity_name)
+    if entity_id is None:
+        return f"Entity not found: {entity_name}"
+
+    results = await anyio.to_thread.run_sync(
+        lambda: bfs_graph(app.conn, entity_id, max_depth=max_depth)
+    )
+
+    if len(results) <= 1:
+        return f"No downstream impact found for {entity_name}."
+
+    lines = [
+        f"## Impact Analysis: {entity_name}",
+        "",
+        f"Affected entities ({len(results) - 1}):",
+        "",
+        "| Entity | Depth | Relationship |",
+        "|--------|-------|-------------|",
+    ]
+    for r in results:
+        if r["node_id"] == entity_id:
+            continue
+        name = lookup_entity_name(app.conn, r["node_id"])
+        lines.append(f"| {name} | {r['depth']} | {r.get('edge_type', '-')} |")
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def coverage(ctx: Context) -> str:
+    """Report knowledge coverage: % of tables with descriptions, relationships, and wiki pages."""
+    app: AppContext = ctx.request_context.lifespan_context
+
+    def _report():
+        total_tables = app.conn.execute("SELECT COUNT(*) FROM current_db_tables").fetchone()[0]
+        tables_with_desc = app.conn.execute(
+            "SELECT COUNT(*) FROM current_db_tables WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+        tables_with_rels = app.conn.execute(
+            "SELECT COUNT(DISTINCT source_id) FROM current_db_relationships"
+        ).fetchone()[0]
+
+        # Wiki pages
+        try:
+            tables_with_wiki = app.conn.execute(
+                "SELECT COUNT(DISTINCT entity_id) FROM wiki_pages WHERE entity_type = 'table'"
+            ).fetchone()[0]
+        except Exception:
+            tables_with_wiki = 0
+
+        total_sps = app.conn.execute("SELECT COUNT(*) FROM current_db_procedures").fetchone()[0]
+        sps_with_desc = app.conn.execute(
+            "SELECT COUNT(*) FROM current_db_procedures WHERE description IS NOT NULL AND description != ''"
+        ).fetchone()[0]
+        total_rels = app.conn.execute("SELECT COUNT(*) FROM current_db_relationships").fetchone()[0]
+
+        try:
+            total_enums = app.conn.execute("SELECT COUNT(*) FROM current_enum_values").fetchone()[0]
+        except Exception:
+            total_enums = 0
+        try:
+            total_transitions = app.conn.execute("SELECT COUNT(*) FROM current_state_transitions").fetchone()[0]
+        except Exception:
+            total_transitions = 0
+
+        def pct(n, d):
+            return f"{n / d * 100:.0f}%" if d > 0 else "N/A"
+
+        lines = [
+            "## Knowledge Coverage",
+            "",
+            "| Metric | Count | Coverage |",
+            "|--------|-------|----------|",
+            f"| Tables | {total_tables} | - |",
+            f"| Tables with descriptions | {tables_with_desc} | {pct(tables_with_desc, total_tables)} |",
+            f"| Tables with relationships | {tables_with_rels} | {pct(tables_with_rels, total_tables)} |",
+            f"| Tables with wiki pages | {tables_with_wiki} | {pct(tables_with_wiki, total_tables)} |",
+            f"| Procedures | {total_sps} | - |",
+            f"| Procedures with descriptions | {sps_with_desc} | {pct(sps_with_desc, total_sps)} |",
+            f"| Relationships | {total_rels} | - |",
+            f"| Enum values | {total_enums} | - |",
+            f"| State transitions | {total_transitions} | - |",
+        ]
+        return "\n".join(lines)
+
+    return await anyio.to_thread.run_sync(_report)
+
+
+@mcp.tool()
+async def data_quality(ctx: Context) -> str:
+    """Report data quality issues: open gaps, low-confidence facts, stale knowledge."""
+    app: AppContext = ctx.request_context.lifespan_context
+
+    def _report():
+        # Open gaps by severity
+        try:
+            gaps = app.conn.execute(
+                "SELECT severity, COUNT(*) FROM knowledge_gaps "
+                "WHERE status = 'open' GROUP BY severity ORDER BY severity"
+            ).fetchall()
+        except Exception:
+            gaps = []
+
+        total_gaps = sum(count for _, count in gaps)
+
+        # Low confidence SPs
+        try:
+            low_conf = app.conn.execute(
+                "SELECT COUNT(*) FROM current_sp_reliability WHERE parse_quality < 0.5"
+            ).fetchone()[0]
+        except Exception:
+            low_conf = 0
+
+        lines = [
+            "## Data Quality Report",
+            "",
+            f"### Open Gaps ({total_gaps})",
+            "",
+        ]
+
+        if gaps:
+            lines.append("| Severity | Count |")
+            lines.append("|----------|-------|")
+            for sev, count in gaps:
+                lines.append(f"| {sev} | {count} |")
+        else:
+            lines.append("No open gaps.")
+
+        lines.extend([
+            "",
+            f"### Low-Confidence Facts",
+            "",
+            f"- Procedures with parse quality < 50%: {low_conf}",
+        ])
+
+        return "\n".join(lines)
+
+    return await anyio.to_thread.run_sync(_report)
+
+
+@mcp.tool()
+async def forensics(
+    entity_name: str, ctx: Context, direction: str = "both", max_depth: int = 5
+) -> str:
+    """Trace data flow: show how data flows to/from an entity through SPs and tables.
+
+    Args:
+        entity_name: Entity to trace from.
+        direction: "upstream", "downstream", or "both" (default "both").
+        max_depth: BFS depth limit (default 5, max 10).
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    from db_wiki.core.queries import find_entity_by_name, lookup_entity_name
+    from db_wiki.graph.bfs import bfs_graph
+
+    # T-04-13: cap depth
+    max_depth = min(max_depth, 10)
+
+    entity_id, etype = find_entity_by_name(app.conn, entity_name)
+    if entity_id is None:
+        return f"Entity not found: {entity_name}"
+
+    data_flow_types = ["reads_from", "writes_to", "feeds_into"]
+    results = await anyio.to_thread.run_sync(
+        lambda: bfs_graph(
+            app.conn, entity_id, max_depth=max_depth, edge_types=data_flow_types
+        )
+    )
+
+    if len(results) <= 1:
+        return f"No data flow found for {entity_name}."
+
+    lines = [f"## Data Forensics: {entity_name}", ""]
+
+    upstream = []
+    downstream = []
+    for r in results:
+        if r["node_id"] == entity_id:
+            continue
+        edge = r.get("edge_type", "")
+        if edge in ("reads_from",):
+            upstream.append(r)
+        elif edge in ("writes_to", "feeds_into"):
+            downstream.append(r)
+        else:
+            upstream.append(r)
+            downstream.append(r)
+
+    if direction in ("upstream", "both") and upstream:
+        lines.append("### Upstream")
+        lines.append("")
+        for r in upstream:
+            name = lookup_entity_name(app.conn, r["node_id"])
+            lines.append(f"- {name} (depth {r['depth']}, {r.get('edge_type', '-')})")
+        lines.append("")
+
+    if direction in ("downstream", "both") and downstream:
+        lines.append("### Downstream")
+        lines.append("")
+        for r in downstream:
+            name = lookup_entity_name(app.conn, r["node_id"])
+            lines.append(f"- {name} (depth {r['depth']}, {r.get('edge_type', '-')})")
+        lines.append("")
+
+    if len(lines) <= 2:
+        return f"No {direction} data flow found for {entity_name}."
+
+    return "\n".join(lines)
+
+
+@mcp.tool()
+async def compare(entity_a: str, entity_b: str, ctx: Context) -> str:
+    """Compare two entities side-by-side showing columns, relationships, and statistics.
+
+    Args:
+        entity_a: First entity name (table or procedure).
+        entity_b: Second entity name (table or procedure).
+    """
+    app: AppContext = ctx.request_context.lifespan_context
+
+    def _compare():
+        def get_table_stats(name):
+            row = app.conn.execute(
+                "SELECT id, table_name, description FROM current_db_tables WHERE table_name = ?",
+                (name,),
+            ).fetchone()
+            if not row:
+                return None
+            tid = row[0]
+            col_count = app.conn.execute(
+                "SELECT COUNT(*) FROM current_db_columns WHERE table_id = ?", (tid,)
+            ).fetchone()[0]
+            rel_count = app.conn.execute(
+                "SELECT COUNT(*) FROM current_db_relationships WHERE source_id = ? OR target_id = ?",
+                (tid, tid),
+            ).fetchone()[0]
+            try:
+                enum_count = app.conn.execute(
+                    "SELECT COUNT(*) FROM current_enum_values WHERE table_name = ?", (name,)
+                ).fetchone()[0]
+            except Exception:
+                enum_count = 0
+            cols = app.conn.execute(
+                "SELECT column_name FROM current_db_columns WHERE table_id = ? ORDER BY id",
+                (tid,),
+            ).fetchall()
+            col_names = {r[0] for r in cols}
+            return {
+                "type": "table",
+                "description": row[2] or "-",
+                "columns": col_count,
+                "relationships": rel_count,
+                "enums": enum_count,
+                "column_names": col_names,
+            }
+
+        stats_a = get_table_stats(entity_a)
+        stats_b = get_table_stats(entity_b)
+
+        if not stats_a:
+            return f"Entity '{entity_a}' not found."
+        if not stats_b:
+            return f"Entity '{entity_b}' not found."
+
+        shared = stats_a["column_names"] & stats_b["column_names"]
+
+        lines = [
+            f"## Comparison: {entity_a} vs {entity_b}",
+            "",
+            f"| Property | {entity_a} | {entity_b} |",
+            "|----------|" + "-" * (len(entity_a) + 2) + "|" + "-" * (len(entity_b) + 2) + "|",
+            f"| Type | {stats_a['type']} | {stats_b['type']} |",
+            f"| Description | {stats_a['description']} | {stats_b['description']} |",
+            f"| Columns | {stats_a['columns']} | {stats_b['columns']} |",
+            f"| Relationships | {stats_a['relationships']} | {stats_b['relationships']} |",
+            f"| Enums | {stats_a['enums']} | {stats_b['enums']} |",
+            f"| Shared columns | {len(shared)} | {len(shared)} |",
+        ]
+
+        if shared:
+            lines.append("")
+            lines.append(f"**Shared columns:** {', '.join(sorted(shared))}")
+
+        return "\n".join(lines)
+
+    result = await anyio.to_thread.run_sync(_compare)
     return result
 
 
