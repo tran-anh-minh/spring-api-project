@@ -595,7 +595,7 @@ async def state_machine(table_name: str, column_name: str, ctx: Context) -> str:
 
     def _generate():
         transitions = app.conn.execute(
-            "SELECT from_state, to_state, via_procedure "
+            "SELECT from_value, to_value, source_procedure_id "
             "FROM current_state_transitions "
             "WHERE table_name = ? AND column_name = ?",
             (table_name, column_name),
