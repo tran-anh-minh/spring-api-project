@@ -26,7 +26,6 @@ from db_wiki.query.context import assemble_context
 from db_wiki.query.executor import execute_query
 from db_wiki.query.generator import generate_sql
 from db_wiki.query.resolver import (
-    find_join_paths,
     get_all_metrics,
     get_schema_version,
     resolve_concepts,
@@ -236,20 +235,6 @@ class QueryPipeline:
         table_entities = [e for e in entities if e.entity_type == "table"]
         core_ids = [e.entity_id for e in table_entities[:5]]
         related_ids: list[int] = []
-
-        # Find JOIN paths between core tables to get related entity IDs
-        if len(core_ids) >= 2:
-            for i in range(len(core_ids)):
-                for j in range(i + 1, len(core_ids)):
-                    try:
-                        steps = find_join_paths(
-                            self._conn, core_ids[i], core_ids[j]
-                        )
-                        for step in steps:
-                            # Collect intermediate table IDs from path
-                            pass  # join steps provide table names, not IDs directly
-                    except Exception:
-                        logger.debug("find_join_paths failed for %s→%s", core_ids[i], core_ids[j])
 
         # Add non-table entities as related
         other_entities = [e for e in entities if e.entity_type != "table"]
