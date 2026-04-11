@@ -524,27 +524,31 @@ function buildNode(entity, confidenceMode) {
 | A5 | vis.js `node.opacity` field is available in vis-network 10.0.2 | Code Examples | Opacity may be nested under `node.color.opacity`; verify against 10.0.2 changelog |
 | A6 | Mermaid ER format syntax for erDiagram is correct string generation | Code Examples | Minor syntax errors possible; validate with a Mermaid renderer |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **MCP-06 `lint` tool — what does linting check?**
    - What we know: MCP-06 specifies `dbwiki:lint` as a manage tool
    - What's unclear: Lint criteria — schema completeness? Confidence thresholds? Orphan tables?
    - Recommendation: Implement as a configurable checker: orphan tables (no FK relationships), unlabeled columns (no description), zero-confidence entities, stale facts (>30 days no reinforcement). Return structured list of lint violations.
+   - RESOLVED: Plan 05-05 implements lint as orphan table checker, empty table checker, low-confidence fact checker, and stale gap checker. Returns structured list of violations.
 
 2. **MCP-06 `history` tool — what time window and entity scope?**
    - What we know: Track knowledge changes over time (bi-temporal model already supports this)
    - What's unclear: Does `history` show global change log, or per-entity history? What's the default window?
    - Recommendation: Per-entity history (`dbwiki:history entity_name`) showing `recorded_at` and `invalidated_at` timeline from the bi-temporal tables. Default window: 30 days.
+   - RESOLVED: Plan 05-05 implements history as a global recent-activity tool querying agent_results table, with configurable limit (default 20, max 100).
 
 3. **`db-wiki serve` port conflict handling**
    - What we know: Default port 8080 is common; may be in use
    - What's unclear: Should the CLI auto-pick an available port or fail loudly?
    - Recommendation: Fail loudly with a clear error message. Auto-port is surprising behavior for a daemon.
+   - RESOLVED: Plan 05-05 uses uvicorn.run() which fails loudly on port conflict by default. No auto-port logic added.
 
 4. **Adaptive frequency algorithm thresholds (D-05)**
    - What we know: Self-tunes based on gap count and knowledge growth rate; Claude's discretion
    - What's unclear: What "many gaps" means numerically; what "plateau" means
    - Recommendation: Start simple — if gap count > 50, halve the fast interval; if gap count < 5 for 3 consecutive runs, double the interval. Store current intervals in config or a state table.
+   - RESOLVED: Plan 05-02 implements adaptive frequency with simpler heuristic: gap count increasing = decrease fast interval by 1min (min 1), gap count decreasing = increase by 2min (max 30). Bounded between 1-30 minutes.
 
 ## Environment Availability
 
