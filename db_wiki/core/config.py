@@ -79,6 +79,22 @@ class QueryConfig(BaseModel):
     max_execution_rows: int = 100
 
 
+class WebConfig(BaseModel):
+    """Web UI server settings."""
+
+    host: str = "127.0.0.1"
+    port: int = 8080
+
+
+class DaemonConfig(BaseModel):
+    """Background learning daemon settings."""
+
+    fast_interval_minutes: int = 5
+    medium_interval_minutes: int = 60
+    deep_interval_minutes: int = 1440
+    adaptive: bool = True
+
+
 class DBWikiConfig(BaseModel):
     """Top-level configuration for db-wiki."""
 
@@ -88,6 +104,8 @@ class DBWikiConfig(BaseModel):
     embedding: EmbeddingConfig = EmbeddingConfig()
     learning: LearningConfig = LearningConfig()
     query: QueryConfig = QueryConfig()
+    web: WebConfig = WebConfig()
+    daemon: DaemonConfig = DaemonConfig()
 
 
 def load_config(store_path: Path) -> DBWikiConfig:
