@@ -18,7 +18,7 @@ import sqlite3
 from dataclasses import dataclass
 
 # Approximate character-to-token ratio for schema text
-CHARS_PER_TOKEN: float = 3.5
+CHARS_PER_TOKEN = 3.5
 
 # Default total token budget (question + instructions + schema context)
 DEFAULT_TOKEN_BUDGET: int = 8000
