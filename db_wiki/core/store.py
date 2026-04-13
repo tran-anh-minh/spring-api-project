@@ -28,7 +28,7 @@ def open_store(db_path: Path) -> sqlite3.Connection:
     """
     abs_path = Path(db_path).resolve()
     abs_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(abs_path))
+    conn = sqlite3.connect(str(abs_path), check_same_thread=False)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.row_factory = sqlite3.Row

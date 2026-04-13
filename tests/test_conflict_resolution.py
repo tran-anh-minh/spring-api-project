@@ -9,7 +9,6 @@ Covers:
 import pytest
 
 
-@pytest.mark.xfail(reason="Wave 0 stub - awaiting Plan 03 implementation")
 class TestConflictResolution:
     def test_resolve_conflict_supersede(self):
         from db_wiki.learning.confidence import resolve_conflict

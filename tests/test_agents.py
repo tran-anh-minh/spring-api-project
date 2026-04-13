@@ -303,7 +303,6 @@ class TestBaseInfra:
 # ── Orchestrator stubs (awaiting Plan 05) ────────────────────────
 
 
-@pytest.mark.xfail(reason="Awaiting Plan 05 implementation")
 class TestOrchestrator:
     def test_orchestrator_full_cycle(self):
         from db_wiki.learning.orchestrator import run_learning_loop

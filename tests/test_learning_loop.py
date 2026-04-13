@@ -9,7 +9,6 @@ Covers:
 import pytest
 
 
-@pytest.mark.xfail(reason="Wave 0 stub - awaiting Plan 03 implementation")
 class TestLearningLoop:
     def test_classify_update_returns_four_ops(self):
         from db_wiki.learning.pipeline import classify_update

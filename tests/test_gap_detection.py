@@ -11,7 +11,6 @@ import pytest
 import sqlite3
 
 
-@pytest.mark.xfail(reason="Wave 0 stub - awaiting Plan 02 implementation")
 class TestGapDetection:
     def test_detect_all_gaps_returns_gap_list(self):
         from db_wiki.learning.gap_detector import detect_all_gaps
