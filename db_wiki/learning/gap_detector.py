@@ -459,8 +459,6 @@ def run_lint_check(conn: sqlite3.Connection) -> dict:
           "recommendations": [str, ...],
         }
     """
-    now_ts = int(time.time())
-    now_iso = ""  # not needed by gap detectors
 
     # Gather all gap types via individual rules (robust against missing tables)
     all_issues: list[dict] = []

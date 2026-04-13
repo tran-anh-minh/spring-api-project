@@ -148,7 +148,7 @@ def ingest(
     Tolerant — warnings are logged for unparseable statements, the rest
     are ingested (D-04).
     """
-    from db_wiki.ingest.ddl_parser import check_file_size_limit, ingest_ddl, parse_ddl
+    from db_wiki.ingest.ddl_parser import ingest_ddl, parse_ddl
     from db_wiki.ingest.sp_parser import detect_content_type, ingest_sp, parse_sp
 
     # T-03-01: resolve store path

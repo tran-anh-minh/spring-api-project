@@ -16,7 +16,7 @@ Security notes:
 import logging
 import sqlite3
 from contextlib import asynccontextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
 import anyio
@@ -125,7 +125,7 @@ async def ingest(file_path: str, ctx: Context) -> str:
         return summary
     except ImportError:
         raise ImportError("DDL parser module not available. Ensure db_wiki.ingest is installed.")
-    except Exception as e:
+    except Exception:
         logger.exception("Ingest failed for %s", file_path)
         raise
 
@@ -206,7 +206,7 @@ async def status(ctx: Context) -> str:
         ) = await anyio.to_thread.run_sync(_query)
 
         lines = [
-            f"Knowledge Store Status",
+            "Knowledge Store Status",
             f"  Tables: {tables} | Columns: {columns} | Procedures: {procedures} | Relationships: {rels}",
             f"  Schema Coverage: {coverage_pct:.1f}%",
             f"  Open Gaps: {gap_count} | Conflicts: {conflict_count}",
@@ -1234,7 +1234,7 @@ async def data_quality(ctx: Context) -> str:
 
         lines.extend([
             "",
-            f"### Low-Confidence Facts",
+            "### Low-Confidence Facts",
             "",
             f"- Procedures with parse quality < 50%: {low_conf}",
         ])

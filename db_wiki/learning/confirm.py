@@ -14,7 +14,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-from db_wiki.learning.pipeline import _invalidate_row, _log_operation, _table_for_attribute, _write_new_fact, find_existing_fact
+from db_wiki.learning.pipeline import _invalidate_row, _log_operation, find_existing_fact
 
 
 def confirm_fact(
