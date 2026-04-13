@@ -1448,6 +1448,160 @@ def export_cmd(
         conn.close()
 
 
+@app.command(name="push-cross")
+def push_cross(
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """Push patterns from this project's knowledge.db to ~/.db-wiki/cross.db (D-07, CROSS-01).
+
+    Extracts naming conventions, enum values, schema shapes, and state machine
+    templates, then writes them to the shared cross-project store.
+    """
+    from db_wiki.cross.export import push_patterns_to_cross
+
+    # T-03-01: resolve to absolute path
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    try:
+        db_name = store_path.parent.name or "default"
+        counts = push_patterns_to_cross(conn, db_name)
+    finally:
+        conn.close()
+
+    total = sum(counts.values())
+    typer.echo(f"Pushed {total} patterns to cross-project store:")
+    for pattern_type, count in counts.items():
+        typer.echo(f"  {pattern_type}: {count}")
+
+
+@app.command(name="pull-cross")
+def pull_cross(
+    pattern_type: Optional[str] = typer.Option(
+        None, "--type", "-t", help="Filter by pattern type: naming, enum, schema_shape, state_machine"
+    ),
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+) -> None:
+    """List available cross-project patterns that could inform this project (D-09, CROSS-02).
+
+    Reads patterns from ~/.db-wiki/cross.db and shows them with similarity-adjusted
+    confidence scores.
+    """
+    from db_wiki.cross.reader import get_cross_patterns
+
+    # T-03-01: resolve to absolute path
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    try:
+        patterns = get_cross_patterns(conn, pattern_type)
+    finally:
+        conn.close()
+
+    if not patterns:
+        typer.echo("No cross-project patterns found. Run 'db-wiki push-cross' on other projects first.")
+        return
+
+    typer.echo(f"Cross-project patterns ({len(patterns)} found):")
+    for p in patterns:
+        typer.echo(
+            f"  [{p['pattern_type']}] {p['pattern_key']} "
+            f"(source: {p['source_db']}, "
+            f"confidence: {p['adjusted_confidence']:.2f}, "
+            f"similarity: {p['similarity']:.2f})"
+        )
+
+
+@app.command(name="lint")
+def lint_cmd(
+    store_path: Path = typer.Option(
+        Path(".db-wiki"), "--store-path", help="Path to the knowledge store directory"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Output raw JSON report instead of formatted text"
+    ),
+) -> None:
+    """Run a comprehensive knowledge health check (lint) on the store.
+
+    Executes all gap detection rules and prints a health score (0-100),
+    categorized issues, statistics, and actionable recommendations.
+    """
+    import json as _json
+
+    from db_wiki.learning.gap_detector import run_lint_check
+
+    # T-03-01: resolve to absolute path
+    store_path = store_path.resolve()
+    db_path = store_path / "knowledge.db"
+
+    if not db_path.exists():
+        typer.echo(
+            f"Error: No knowledge store at {store_path}. Run 'db-wiki init' first.",
+            err=True,
+        )
+        raise typer.Exit(code=1)
+
+    conn = open_store(db_path)
+    init_schema(conn)
+
+    try:
+        report = run_lint_check(conn)
+    finally:
+        conn.close()
+
+    if json_output:
+        typer.echo(_json.dumps(report, indent=2))
+        return
+
+    typer.echo(f"Health Score: {report['health_score']}/100")
+    typer.echo("")
+    typer.echo("Statistics:")
+    for key, val in report["stats"].items():
+        typer.echo(f"  {key.replace('_', ' ').title()}: {val}")
+
+    if report["issues"]:
+        typer.echo("")
+        typer.echo(f"Issues ({len(report['issues'])} total):")
+        for issue in report["issues"]:
+            typer.echo(
+                f"  [{issue['severity'].upper()}] {issue['type']}: "
+                f"{issue['entity']} — {issue['description']}"
+            )
+    else:
+        typer.echo("")
+        typer.echo("No issues found.")
+
+    if report["recommendations"]:
+        typer.echo("")
+        typer.echo("Recommendations:")
+        for rec in report["recommendations"]:
+            typer.echo(f"  - {rec}")
+
+
 # ---------------------------------------------------------------------------
 # Phase 5 daemon command group (CLI-05 — discoverability stubs per D-04)
 #

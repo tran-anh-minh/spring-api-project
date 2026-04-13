@@ -392,6 +392,68 @@ CREATE VIRTUAL TABLE IF NOT EXISTS fts_entities USING fts5(
     entity_id UNINDEXED,
     tokenize='porter ascii'
 );
+
+-- ===========================================================================
+-- Knowledge Facts: free-form human-injected knowledge (bi-temporal)
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS knowledge_facts (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    entity_type         TEXT NOT NULL,   -- "table", "column", "procedure"
+    entity_id           TEXT NOT NULL,   -- e.g. "Orders" or "Orders.Status"
+    fact_type           TEXT NOT NULL,   -- e.g. "human_teaching", "inferred"
+    attribute           TEXT,            -- optional sub-attribute name
+    value               TEXT NOT NULL,   -- the fact content / explanation text
+    confidence          REAL NOT NULL DEFAULT 1.0,
+    confirmed_by        TEXT,            -- e.g. "human"
+    evidence_json       TEXT,            -- JSON blob with source context
+    superseded_by_id    INTEGER REFERENCES knowledge_facts(id),
+    -- bi-temporal columns (D-01 / D-02)
+    valid_from          TEXT NOT NULL,
+    valid_from_ts       INTEGER NOT NULL,
+    valid_until         TEXT,
+    valid_until_ts      INTEGER,
+    recorded_at         TEXT NOT NULL,
+    recorded_at_ts      INTEGER NOT NULL,
+    invalidated_at      TEXT,
+    invalidated_at_ts   INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_entity
+    ON knowledge_facts(entity_type, entity_id);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_recorded_at_ts
+    ON knowledge_facts(recorded_at_ts);
+CREATE INDEX IF NOT EXISTS idx_knowledge_facts_valid_from_ts
+    ON knowledge_facts(valid_from_ts);
+
+CREATE VIEW IF NOT EXISTS current_knowledge_facts AS
+SELECT * FROM knowledge_facts
+WHERE valid_until IS NULL
+  AND invalidated_at IS NULL;
+
+-- ===========================================================================
+-- Knowledge Operations Audit Log (append-only mutation ledger)
+-- ===========================================================================
+
+CREATE TABLE IF NOT EXISTS knowledge_operations (
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    timestamp_ts        INTEGER NOT NULL,
+    operation           TEXT NOT NULL,  -- ADD, REINFORCE, CONFLICT, SUPERSEDE, CONFIRM, TEACH, DECAY
+    entity_type         TEXT,
+    entity_id           TEXT,
+    attribute           TEXT,
+    old_value           TEXT,
+    new_value           TEXT,
+    confidence_before   REAL,
+    confidence_after    REAL,
+    source              TEXT,  -- "learning_loop", "human", "query_feedback", "ingest"
+    details             TEXT   -- JSON blob for extra context
+);
+
+CREATE INDEX IF NOT EXISTS idx_knowledge_operations_ts
+    ON knowledge_operations(timestamp_ts);
+CREATE INDEX IF NOT EXISTS idx_knowledge_operations_entity
+    ON knowledge_operations(entity_type, entity_id);
 """
 
 

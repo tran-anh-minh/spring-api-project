@@ -442,6 +442,154 @@ def detect_all_gaps(
 
 
 # ---------------------------------------------------------------------------
+# Lint health check
+# ---------------------------------------------------------------------------
+
+def run_lint_check(conn: sqlite3.Connection) -> dict:
+    """Comprehensive knowledge health check — inspired by Karpathy wiki lint.
+
+    Runs all gap detectors and aggregates results into a structured health
+    report with a 0-100 score, issue list, statistics, and recommendations.
+
+    Returns:
+        {
+          "health_score": 0-100,
+          "issues": [{"type": str, "severity": str, "entity": str, "description": str}],
+          "stats": {"total_facts": N, "stale_facts": N, "contradictions": N, "orphan_tables": N},
+          "recommendations": [str, ...],
+        }
+    """
+    now_ts = int(time.time())
+    now_iso = ""  # not needed by gap detectors
+
+    # Gather all gap types via individual rules (robust against missing tables)
+    all_issues: list[dict] = []
+
+    def _run(rule_fn, *args):
+        try:
+            return rule_fn(*args)
+        except Exception:
+            logger.exception("lint: error in %s", rule_fn.__name__)
+            return []
+
+    orphan_gaps = _run(detect_orphan_tables, conn)
+    contradiction_gaps = _run(detect_cross_sp_contradictions, conn)
+    stale_gaps = _run(detect_stale_facts, conn)
+    alias_gaps = _run(detect_alias_clusters, conn)
+    state_machine_gaps = _run(detect_incomplete_state_machines, conn)
+    unlabeled_gaps = _run(detect_unlabeled_enums, conn)
+    missing_fk_gaps = _run(detect_missing_fks, conn)
+    missing_join_gaps = _run(detect_missing_joins, conn)
+    unresolved_gaps = _run(detect_unresolved_calls, conn)
+    low_conf_gaps = _run(detect_low_confidence_facts, conn)
+    coverage_gaps = _run(detect_coverage_gaps, conn)
+    pattern_gaps = _run(detect_pattern_anomalies, conn)
+
+    def _severity_label(s: float) -> str:
+        if s >= 0.7:
+            return "high"
+        if s >= 0.4:
+            return "medium"
+        return "low"
+
+    def _gaps_to_issues(gaps, gap_type: str) -> list[dict]:
+        return [
+            {
+                "type": gap_type,
+                "severity": _severity_label(g.severity),
+                "entity": g.entity_name,
+                "description": g.description,
+            }
+            for g in gaps
+        ]
+
+    all_issues.extend(_gaps_to_issues(orphan_gaps, "orphan_table"))
+    all_issues.extend(_gaps_to_issues(contradiction_gaps, "contradiction"))
+    all_issues.extend(_gaps_to_issues(stale_gaps, "stale_fact"))
+    all_issues.extend(_gaps_to_issues(alias_gaps, "alias_inconsistency"))
+    all_issues.extend(_gaps_to_issues(state_machine_gaps, "incomplete_state_machine"))
+    all_issues.extend(_gaps_to_issues(unlabeled_gaps, "unlabeled_enum"))
+    all_issues.extend(_gaps_to_issues(missing_fk_gaps, "missing_fk"))
+    all_issues.extend(_gaps_to_issues(missing_join_gaps, "missing_join_fk"))
+    all_issues.extend(_gaps_to_issues(unresolved_gaps, "unresolved_call"))
+    all_issues.extend(_gaps_to_issues(low_conf_gaps, "low_confidence_fact"))
+    all_issues.extend(_gaps_to_issues(coverage_gaps, "coverage_gap"))
+    all_issues.extend(_gaps_to_issues(pattern_gaps, "pattern_anomaly"))
+
+    # Stats
+    try:
+        total_facts = sum(
+            conn.execute(f"SELECT COUNT(*) FROM {t}").fetchone()[0]
+            for t in ("current_enum_values", "current_bitmask_definitions", "current_column_aliases")
+        )
+    except Exception:
+        total_facts = 0
+
+    # Health score: start at 100, deduct weighted penalty per issue
+    _penalty = {"high": 5, "medium": 2, "low": 1}
+    penalty = sum(_penalty.get(i["severity"], 1) for i in all_issues)
+    health_score = max(0, min(100, 100 - penalty))
+
+    # Statistics
+    stats = {
+        "total_facts": total_facts,
+        "stale_facts": len(stale_gaps),
+        "contradictions": len(contradiction_gaps),
+        "orphan_tables": len(orphan_gaps),
+        "alias_clusters": len(alias_gaps),
+        "incomplete_state_machines": len(state_machine_gaps),
+        "missing_fks": len(missing_fk_gaps),
+        "unresolved_calls": len(unresolved_gaps),
+        "coverage_gaps": len(coverage_gaps),
+        "low_confidence_facts": len(low_conf_gaps),
+        "pattern_anomalies": len(pattern_gaps),
+    }
+
+    # Recommendations
+    recommendations: list[str] = []
+    if contradiction_gaps:
+        entities = ", ".join(g.entity_name for g in contradiction_gaps[:3])
+        recommendations.append(
+            f"Resolve {len(contradiction_gaps)} contradictions in: {entities}"
+        )
+    if orphan_gaps:
+        recommendations.append(
+            f"Investigate {len(orphan_gaps)} orphan table(s) with no relationships"
+        )
+    if unlabeled_gaps:
+        total_unlabeled = sum(
+            int(g.description.split()[0]) for g in unlabeled_gaps
+            if g.description and g.description.split()[0].isdigit()
+        )
+        recommendations.append(
+            f"Confirm {total_unlabeled or len(unlabeled_gaps)} unlabeled enum value(s)"
+        )
+    if stale_gaps:
+        recommendations.append(
+            f"Re-validate {len(stale_gaps)} stale low-confidence fact group(s)"
+        )
+    if alias_gaps:
+        recommendations.append(
+            f"Resolve {len(alias_gaps)} alias cluster(s) with competing names"
+        )
+    if state_machine_gaps:
+        recommendations.append(
+            f"Complete {len(state_machine_gaps)} incomplete state machine(s)"
+        )
+    if missing_fk_gaps:
+        recommendations.append(
+            f"Declare FK relationships for {len(missing_fk_gaps)} likely foreign key column(s)"
+        )
+
+    return {
+        "health_score": health_score,
+        "issues": all_issues,
+        "stats": stats,
+        "recommendations": recommendations,
+    }
+
+
+# ---------------------------------------------------------------------------
 # Deduplication / upsert
 # ---------------------------------------------------------------------------
 

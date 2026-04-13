@@ -153,11 +153,54 @@ def make_routes(conn: sqlite3.Connection, config: DBWikiConfig):
     # ------------------------------------------------------------------
 
     async def export_api(request: Request) -> JSONResponse:
-        """POST /api/export — deferred to Plan 04 for actual implementation."""
-        return JSONResponse(
-            {"status": "not_implemented", "export_path": ""},
-            status_code=501,
-        )
+        """POST /api/export — run export for requested format/entity.
+
+        Request body (JSON):
+          {
+            "format": "markdown|mermaid|json|ddl",  # optional, default all
+            "entity_type": "table|procedure",        # optional, default table
+            "entity_name": "optional entity name"    # optional, default all
+          }
+        """
+        from db_wiki.export.runner import ALL_FORMATS, run_export
+
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+
+        fmt = body.get("format")
+        entity_type = body.get("entity_type", "table")
+        entity_name = body.get("entity_name") or None
+
+        # Validate format if provided
+        if fmt and fmt not in ALL_FORMATS:
+            return JSONResponse(
+                {"error": f"Invalid format '{fmt}'. Valid: {ALL_FORMATS}"},
+                status_code=400,
+            )
+
+        formats = [fmt] if fmt else None
+        # Derive store dir from the connection's database file path
+        db_file = conn.execute("PRAGMA database_list").fetchone()[2]
+        output_dir = Path(db_file).parent / "export" if db_file else Path(".db-wiki/export")
+
+        try:
+            results = await anyio.to_thread.run_sync(
+                lambda: run_export(conn, output_dir, formats, entity_name, entity_type)
+            )
+        except Exception:
+            logger.exception("Error in export_api")
+            return JSONResponse(
+                {"error": "Export failed."},
+                status_code=500,
+            )
+
+        return JSONResponse({
+            "status": "ok",
+            "files_written": len(results),
+            "paths": list(results.keys()),
+        })
 
     return graph_api, wiki_api, search_api, dashboard_api, export_api
 

@@ -14,7 +14,6 @@ XFAIL_REASON = "Phase 5 Wave 0 stub — not yet implemented"
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_scheduler_starts():
     """DaemonScheduler.start() creates and starts a background thread. (LEARN-13)"""
     from db_wiki.daemon.scheduler import DaemonScheduler
@@ -28,7 +27,6 @@ def test_scheduler_starts():
         sched.stop()
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_scheduler_stops():
     """DaemonScheduler.stop() sets _stop_event after start(). (LEARN-13)"""
     from db_wiki.daemon.scheduler import DaemonScheduler
@@ -39,7 +37,6 @@ def test_scheduler_stops():
     assert sched._stop_event.is_set()
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_scheduler_uses_instance_scheduler():
     """DaemonScheduler uses schedule.Scheduler() instance, not global schedule module. (LEARN-13)"""
     import schedule as schedule_lib
@@ -52,7 +49,6 @@ def test_scheduler_uses_instance_scheduler():
     assert sched._scheduler is not schedule_lib.default_scheduler
 
 
-@pytest.mark.xfail(reason=XFAIL_REASON, strict=True)
 def test_scheduler_adaptive_frequency():
     """DaemonScheduler adjusts run intervals based on gap count. (D-05)"""
     from db_wiki.daemon.scheduler import DaemonScheduler

@@ -140,9 +140,11 @@ class DaemonScheduler:
         medium = self._get_medium_interval()
         deep = self._get_deep_interval()
 
-        self._scheduler.every(fast).minutes.do(self._run_job, conn, "fast")
+        fast_job = self._scheduler.every(fast).minutes.do(self._run_job, conn, "fast")
+        fast_job._job_tag = "fast"  # type: ignore[attr-defined]
         self._scheduler.every(medium).minutes.do(self._run_job, conn, "medium")
         self._scheduler.every(deep).minutes.do(self._run_job, conn, "deep")
+        self._conn = conn  # keep ref for rescheduling
 
         logger.info(
             "Scheduled: fast=%dm, medium=%dm, deep=%dm",
@@ -197,6 +199,7 @@ class DaemonScheduler:
                     )
                     self._config.daemon.fast_interval_minutes = new_fast
                     logger.info("Adaptive: gaps increasing, fast=%dm", new_fast)
+                    self._reschedule_fast(new_fast)
                 elif current_gaps < self._last_gap_count:
                     # Fewer gaps — decrease frequency (longer interval)
                     new_fast = min(
@@ -205,7 +208,21 @@ class DaemonScheduler:
                     )
                     self._config.daemon.fast_interval_minutes = new_fast
                     logger.info("Adaptive: gaps decreasing, fast=%dm", new_fast)
+                    self._reschedule_fast(new_fast)
 
             self._last_gap_count = current_gaps
         except Exception:
             logger.debug("Adaptive frequency check failed", exc_info=True)
+
+    def _reschedule_fast(self, new_interval: int) -> None:
+        """Cancel the fast job and re-register at *new_interval* minutes."""
+        for job in list(self._scheduler.jobs):
+            if getattr(job, "_job_tag", None) == "fast":
+                self._scheduler.cancel_job(job)
+        conn = getattr(self, "_conn", None)
+        if conn is not None:
+            job = self._scheduler.every(new_interval).minutes.do(
+                self._run_job, conn, "fast"
+            )
+            job._job_tag = "fast"  # type: ignore[attr-defined]
+            logger.info("Rescheduled fast job at %dm", new_interval)

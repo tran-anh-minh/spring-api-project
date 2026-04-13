@@ -701,8 +701,168 @@ async def teach(
 
 
 # ---------------------------------------------------------------------------
-# Phase 4: Query Engine MCP tools (MCP-04, MCP-05)
+# Skill: teach_knowledge — free-form human knowledge injection
+# Skill: entity_history — bi-temporal timeline viewer
 # ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+async def teach_knowledge(entity: str, explanation: str, ctx: Context) -> str:
+    """Inject free-form business rules or domain context for an entity.
+
+    Stores the explanation in knowledge_facts with fact_type='human_teaching',
+    confidence=1.0, and confirmed_by='human'. Use this when auto-discovery
+    cannot capture tribal knowledge (e.g. "Orders.Status=5 means fraud hold").
+
+    Args:
+        entity: Entity name, e.g. "Orders" (table) or "Orders.Status" (column)
+                or "usp_ProcessOrder" (procedure).
+        explanation: Free-form explanation or business rule to record.
+    """
+    import json
+    import time
+    from datetime import datetime, timezone
+
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+
+    def _insert():
+        now_ts = int(time.time())
+        now_iso = datetime.now(tz=timezone.utc).isoformat()
+
+        # Infer entity_type from entity string shape
+        parts = entity.split(".")
+        if len(parts) == 2:
+            entity_type = "column"
+        elif entity.lower().startswith(("usp_", "sp_", "proc_")):
+            entity_type = "procedure"
+        else:
+            entity_type = "table"
+
+        evidence = json.dumps({"explanation": explanation, "source": "human_teaching"})
+
+        conn = app_ctx.conn
+        cur = conn.execute(
+            """INSERT INTO knowledge_facts
+               (entity_type, entity_id, fact_type, attribute, value,
+                confidence, confirmed_by, evidence_json,
+                valid_from, valid_from_ts, recorded_at, recorded_at_ts)
+               VALUES (?, ?, 'human_teaching', NULL, ?,
+                       1.0, 'human', ?,
+                       ?, ?, ?, ?)""",
+            (entity_type, entity, explanation, evidence,
+             now_iso, now_ts, now_iso, now_ts),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+    fact_id = await anyio.to_thread.run_sync(_insert)
+    return f"Taught: [{entity}] — fact recorded (id={fact_id}, confidence=1.0, confirmed_by=human)"
+
+
+@mcp.tool()
+async def entity_history(entity: str, ctx: Context) -> str:
+    """Show the bi-temporal knowledge timeline for an entity.
+
+    Queries knowledge_facts (ALL rows including superseded/invalidated),
+    plus enum_values and state_transitions for the entity. Returns a
+    timeline sorted by recorded_at showing what was believed, when learned,
+    when invalidated, and what superseded it.
+
+    Args:
+        entity: Entity name, e.g. "Orders" or "Orders.Status".
+    """
+    app_ctx: AppContext = ctx.request_context.lifespan_context
+
+    def _query():
+        conn = app_ctx.conn
+        lines = [f"Knowledge Timeline: {entity}", ""]
+
+        # --- knowledge_facts (all rows, including invalidated) ---
+        try:
+            rows = conn.execute(
+                """SELECT id, fact_type, value, confidence, confirmed_by,
+                          valid_from, valid_until, recorded_at, invalidated_at,
+                          superseded_by_id
+                   FROM knowledge_facts
+                   WHERE entity_id = ?
+                   ORDER BY recorded_at_ts ASC""",
+                (entity,),
+            ).fetchall()
+        except Exception:
+            rows = []
+
+        if rows:
+            lines.append("## Knowledge Facts")
+            for row in rows:
+                (fid, fact_type, value, confidence, confirmed_by,
+                 valid_from, valid_until, recorded_at, invalidated_at,
+                 superseded_by_id) = row
+                status = "current"
+                if invalidated_at:
+                    status = f"invalidated {invalidated_at}"
+                elif valid_until:
+                    status = f"expired {valid_until}"
+                elif superseded_by_id:
+                    status = f"superseded by id={superseded_by_id}"
+                conf_str = f"{confidence:.2f}" if confidence is not None else "?"
+                lines.append(
+                    f"  [{recorded_at}] id={fid} type={fact_type} "
+                    f"conf={conf_str} by={confirmed_by or '-'} [{status}]"
+                )
+                lines.append(f"    {value[:120]}")
+        else:
+            lines.append("No knowledge_facts entries found for this entity.")
+
+        # --- enum_values (table/column entities) ---
+        parts = entity.split(".", 1)
+        table_name = parts[0]
+        column_name = parts[1] if len(parts) == 2 else None
+
+        if column_name:
+            try:
+                ev_rows = conn.execute(
+                    """SELECT enum_value, enum_label, confidence, detection_method,
+                              valid_from, valid_until, recorded_at, invalidated_at
+                       FROM enum_values
+                       WHERE table_name = ? AND column_name = ?
+                       ORDER BY recorded_at_ts ASC""",
+                    (table_name, column_name),
+                ).fetchall()
+                if ev_rows:
+                    lines.append("")
+                    lines.append("## Enum Values")
+                    for r in ev_rows:
+                        status = "invalidated" if r[7] else ("expired" if r[5] else "current")
+                        lines.append(
+                            f"  [{r[6]}] value={r[0]} label={r[1] or '-'} "
+                            f"conf={r[2]:.2f} method={r[3]} [{status}]"
+                        )
+            except Exception:
+                pass
+
+            try:
+                st_rows = conn.execute(
+                    """SELECT from_value, to_value, confidence,
+                              valid_from, valid_until, recorded_at, invalidated_at
+                       FROM state_transitions
+                       WHERE table_name = ? AND column_name = ?
+                       ORDER BY recorded_at_ts ASC""",
+                    (table_name, column_name),
+                ).fetchall()
+                if st_rows:
+                    lines.append("")
+                    lines.append("## State Transitions")
+                    for r in st_rows:
+                        status = "invalidated" if r[6] else ("expired" if r[4] else "current")
+                        lines.append(
+                            f"  [{r[5]}] {r[0]} -> {r[1]} conf={r[2]:.2f} [{status}]"
+                        )
+            except Exception:
+                pass
+
+        return "\n".join(lines)
+
+    return await anyio.to_thread.run_sync(_query)
 
 
 @mcp.tool()
@@ -1232,7 +1392,6 @@ async def compare(entity_a: str, entity_b: str, ctx: Context) -> str:
 
     result = await anyio.to_thread.run_sync(_compare)
     return result
-
 
 def main() -> None:
     """Entry point for the db-wiki-mcp MCP server (stdio transport)."""

@@ -14,7 +14,7 @@ import sqlite3
 import time
 from datetime import datetime, timezone
 
-from db_wiki.learning.pipeline import _invalidate_row, _table_for_attribute, _write_new_fact, find_existing_fact
+from db_wiki.learning.pipeline import _invalidate_row, _log_operation, _table_for_attribute, _write_new_fact, find_existing_fact
 
 
 def confirm_fact(
@@ -49,6 +49,13 @@ def confirm_fact(
     # Invalidate old row and insert confirmed version
     _invalidate_row(conn, attribute, existing["id"], now_ts, now_iso)
     _write_confirmed_fact(conn, entity_name, attribute, value, now_ts, now_iso)
+    _log_operation(
+        conn, now_ts, "CONFIRM",
+        entity_type=entity_type, entity_id=entity_name,
+        attribute=attribute, old_value=existing["value"], new_value=value,
+        confidence_before=existing["confidence"], confidence_after=1.0,
+        source="human",
+    )
     conn.commit()
 
     return f"Confirmed: {entity_name}.{attribute} = {value} (confidence set to 1.0)"
@@ -77,6 +84,16 @@ def teach_fact(
 
     # Write new fact with human authority
     _write_confirmed_fact(conn, entity_name, attribute, value, now_ts, now_iso)
+    _log_operation(
+        conn, now_ts, "TEACH",
+        entity_type=entity_type, entity_id=entity_name,
+        attribute=attribute,
+        old_value=existing["value"] if existing is not None else None,
+        new_value=value,
+        confidence_before=existing["confidence"] if existing is not None else None,
+        confidence_after=1.0,
+        source="human",
+    )
     conn.commit()
 
     return f"Taught: {entity_name}.{attribute} = {value} (confidence 1.0, human confirmed)"

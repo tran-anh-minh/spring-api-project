@@ -13,6 +13,7 @@ Exports:
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from db_wiki.learning.confidence import reinforce_confidence, resolve_conflict
@@ -139,6 +140,12 @@ def apply_findings(
             _write_new_fact(conn, item.entity_type, item.entity_name,
                             item.attribute, item.value, item.confidence,
                             item.source, now_ts, now_iso)
+            _log_operation(
+                conn, now_ts, "ADD",
+                entity_type=item.entity_type, entity_id=item.entity_name,
+                attribute=item.attribute, new_value=item.value,
+                confidence_after=item.confidence, source=item.source or "learning_loop",
+            )
             results["add"] += 1
 
         elif op == UpdateOp.REINFORCE:
@@ -147,6 +154,13 @@ def apply_findings(
             _write_new_fact(conn, item.entity_type, item.entity_name,
                             item.attribute, item.value, new_conf,
                             item.source, now_ts, now_iso)
+            _log_operation(
+                conn, now_ts, "REINFORCE",
+                entity_type=item.entity_type, entity_id=item.entity_name,
+                attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                confidence_before=existing["confidence"], confidence_after=new_conf,
+                source=item.source or "learning_loop",
+            )
             results["reinforce"] += 1
 
         elif op == UpdateOp.CONFLICT:
@@ -165,17 +179,48 @@ def apply_findings(
                 _write_new_fact(conn, item.entity_type, item.entity_name,
                                 item.attribute, item.value, item.confidence,
                                 item.source, now_ts, now_iso)
+                _log_operation(
+                    conn, now_ts, "SUPERSEDE",
+                    entity_type=item.entity_type, entity_id=item.entity_name,
+                    attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                    confidence_before=existing["confidence"], confidence_after=item.confidence,
+                    source=item.source or "learning_loop",
+                    details={"strategy": strategy, "rationale": rationale},
+                )
             elif strategy == "SUPERSEDE_B":
                 # Fact A (existing) wins — discard new finding, no changes needed
-                pass
+                _log_operation(
+                    conn, now_ts, "CONFLICT",
+                    entity_type=item.entity_type, entity_id=item.entity_name,
+                    attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                    confidence_before=existing["confidence"], confidence_after=existing["confidence"],
+                    source=item.source or "learning_loop",
+                    details={"strategy": strategy, "rationale": rationale},
+                )
             elif strategy == "KEEP":
                 _write_new_fact(conn, item.entity_type, item.entity_name,
                                 item.attribute, item.value, item.confidence,
                                 item.source, now_ts, now_iso)
+                _log_operation(
+                    conn, now_ts, "CONFLICT",
+                    entity_type=item.entity_type, entity_id=item.entity_name,
+                    attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                    confidence_before=existing["confidence"], confidence_after=item.confidence,
+                    source=item.source or "learning_loop",
+                    details={"strategy": strategy, "rationale": rationale},
+                )
             elif strategy == "SPLIT":
                 _write_new_fact(conn, item.entity_type, item.entity_name,
                                 item.attribute, item.value, item.confidence,
                                 item.source, now_ts, now_iso)
+                _log_operation(
+                    conn, now_ts, "CONFLICT",
+                    entity_type=item.entity_type, entity_id=item.entity_name,
+                    attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                    confidence_before=existing["confidence"], confidence_after=item.confidence,
+                    source=item.source or "learning_loop",
+                    details={"strategy": strategy, "rationale": rationale},
+                )
             elif strategy == "ESCALATE":
                 # Create an escalated conflict gap for human review
                 conn.execute(
@@ -190,6 +235,14 @@ def apply_findings(
                      f"Conflict: {rationale}",
                      0.8, "open",
                      now_iso, now_ts, now_iso, now_ts),
+                )
+                _log_operation(
+                    conn, now_ts, "CONFLICT",
+                    entity_type=item.entity_type, entity_id=item.entity_name,
+                    attribute=item.attribute, old_value=existing["value"], new_value=item.value,
+                    confidence_before=existing["confidence"], confidence_after=item.confidence,
+                    source=item.source or "learning_loop",
+                    details={"strategy": "ESCALATE", "rationale": rationale},
                 )
                 results["escalated"] += 1
 
@@ -315,6 +368,50 @@ def bump_attempt_count(
 
 
 # ── Private helpers ──────────────────────────────────────────────
+
+
+def _log_operation(
+    conn: sqlite3.Connection,
+    now_ts: int,
+    operation: str,
+    entity_type: str | None = None,
+    entity_id: str | None = None,
+    attribute: str | None = None,
+    old_value: str | None = None,
+    new_value: str | None = None,
+    confidence_before: float | None = None,
+    confidence_after: float | None = None,
+    source: str | None = None,
+    details: dict | None = None,
+) -> None:
+    """Append a row to the knowledge_operations audit log.
+
+    Silently no-ops if the table does not exist (e.g. in test DBs that
+    use minimal schemas without running the full DDL).
+    """
+    try:
+        conn.execute(
+            """INSERT INTO knowledge_operations
+               (timestamp_ts, operation, entity_type, entity_id, attribute,
+                old_value, new_value, confidence_before, confidence_after,
+                source, details)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                now_ts,
+                operation,
+                entity_type,
+                entity_id,
+                attribute,
+                old_value,
+                new_value,
+                confidence_before,
+                confidence_after,
+                source,
+                json.dumps(details) if details is not None else None,
+            ),
+        )
+    except Exception:
+        pass
 
 
 def _table_for_attribute(attribute: str) -> str | None:
